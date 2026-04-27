@@ -242,14 +242,14 @@ function App() {
 
 function LoginScreen({ onAuthenticated }) {
   const [mode, setMode] = useState('signin')
+  const [signInRole, setSignInRole] = useState('student')
   const [credentials, setCredentials] = useState(demoAccounts.student)
   const [signup, setSignup] = useState({
     full_name: '',
-    email: '',
+    institutional_email: '',
     register_number: '',
     department: '',
-    batch: '',
-    class_name: '',
+    section: '',
     password: '',
     confirmPassword: '',
   })
@@ -278,19 +278,19 @@ function LoginScreen({ onAuthenticated }) {
 
   function validateSignup() {
     const fullName = signup.full_name.trim()
-    const email = signup.email.trim().toLowerCase()
+    const institutionalEmail = signup.institutional_email.trim().toLowerCase()
     const registerNumber = signup.register_number.trim()
     const department = signup.department.trim()
-    const batch = signup.batch.trim()
+    const section = signup.section.trim()
 
     if (!fullName) return 'Full name is required.'
-    if (!email) return 'Institutional email is required.'
-    if (!email.endsWith(STUDENT_EMAIL_DOMAIN)) {
+    if (!institutionalEmail) return 'Institutional email is required.'
+    if (!institutionalEmail.endsWith(STUDENT_EMAIL_DOMAIN)) {
       return 'Use your official Stella Mary’s institutional email address.'
     }
     if (!registerNumber) return 'Register number is required.'
     if (!department) return 'Department is required.'
-    if (!batch) return 'Batch is required.'
+    if (!section) return 'Section is required.'
     if (!signup.password) return 'Password is required.'
     if (signup.password !== signup.confirmPassword) return 'Confirm password must match.'
 
@@ -313,26 +313,26 @@ function LoginScreen({ onAuthenticated }) {
       await apiRequest('/auth/register', {
         method: 'POST',
         body: {
-          email: signup.email.trim().toLowerCase(),
+          email: signup.institutional_email.trim().toLowerCase(),
           full_name: signup.full_name.trim(),
           password: signup.password,
           role: 'student',
           register_number: signup.register_number.trim(),
           department: signup.department.trim(),
-          batch: signup.batch.trim(),
-          class_name: signup.class_name.trim() || null,
+          batch: '',
+          class_name: signup.section.trim(),
           is_active: true,
           is_superuser: false,
         },
       })
-      setCredentials({ email: signup.email.trim().toLowerCase(), password: '' })
+      setSignInRole('student')
+      setCredentials({ email: signup.institutional_email.trim().toLowerCase(), password: '' })
       setSignup({
         full_name: '',
-        email: '',
+        institutional_email: '',
         register_number: '',
         department: '',
-        batch: '',
-        class_name: '',
+        section: '',
         password: '',
         confirmPassword: '',
       })
@@ -345,8 +345,9 @@ function LoginScreen({ onAuthenticated }) {
     }
   }
 
-  function fillDemoAccount(account) {
-    setCredentials(demoAccounts[account])
+  function selectSignInRole(role) {
+    setSignInRole(role)
+    setCredentials(demoAccounts[role])
     setError('')
     setSuccess('')
     setMode('signin')
@@ -411,14 +412,22 @@ function LoginScreen({ onAuthenticated }) {
 
         {mode === 'signin' ? (
           <>
-            <div className="segmented-control login-role-switch" aria-label="Login account">
-              <button type="button" onClick={() => fillDemoAccount('student')}>
+            <div className="segmented-control login-role-switch" aria-label="Sign in role">
+              <button
+                className={signInRole === 'student' ? 'active' : ''}
+                type="button"
+                onClick={() => selectSignInRole('student')}
+              >
                 <UserRound size={16} aria-hidden="true" />
-                Student Login
+                Student
               </button>
-              <button type="button" onClick={() => fillDemoAccount('admin')}>
+              <button
+                className={signInRole === 'admin' ? 'active' : ''}
+                type="button"
+                onClick={() => selectSignInRole('admin')}
+              >
                 <ShieldCheck size={16} aria-hidden="true" />
-                Admin Login
+                Admin
               </button>
             </div>
 
@@ -472,9 +481,9 @@ function LoginScreen({ onAuthenticated }) {
               Institutional Email
               <input
                 type="email"
-                value={signup.email}
+                value={signup.institutional_email}
                 onChange={(event) =>
-                  setSignup((current) => ({ ...current, email: event.target.value }))
+                  setSignup((current) => ({ ...current, institutional_email: event.target.value }))
                 }
                 autoComplete="email"
                 placeholder="name@stellamaryscoe.edu.in"
@@ -509,7 +518,7 @@ function LoginScreen({ onAuthenticated }) {
             </div>
             <div className="form-two-column">
               <label>
-                Register Number / Roll Number
+                Register Number
                 <input
                   value={signup.register_number}
                   onChange={(event) =>
@@ -529,27 +538,16 @@ function LoginScreen({ onAuthenticated }) {
                 />
               </label>
             </div>
-            <div className="form-two-column">
-              <label>
-                Batch
-                <input
-                  value={signup.batch}
-                  onChange={(event) =>
-                    setSignup((current) => ({ ...current, batch: event.target.value }))
-                  }
-                  required
-                />
-              </label>
-              <label>
-                Class Name
-                <input
-                  value={signup.class_name}
-                  onChange={(event) =>
-                    setSignup((current) => ({ ...current, class_name: event.target.value }))
-                  }
-                />
-              </label>
-            </div>
+            <label>
+              Section
+              <input
+                value={signup.section}
+                onChange={(event) =>
+                  setSignup((current) => ({ ...current, section: event.target.value }))
+                }
+                required
+              />
+            </label>
             {error ? <p className="form-error">{error}</p> : null}
             <button className="primary-button" type="submit" disabled={isRegistering}>
               {isRegistering ? <Loader2 className="spin" size={18} aria-hidden="true" /> : null}

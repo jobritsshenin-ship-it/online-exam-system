@@ -63,9 +63,6 @@ def create_student_user(db: Session, user_in: UserCreate) -> User:
     if not user_in.department or not user_in.department.strip():
         raise ValueError("Department is required.")
 
-    if not user_in.batch or not user_in.batch.strip():
-        raise ValueError("Batch is required.")
-
     student_in = UserCreate(
         email=email,
         full_name=user_in.full_name.strip(),
@@ -73,7 +70,7 @@ def create_student_user(db: Session, user_in: UserCreate) -> User:
         role=UserRole.STUDENT,
         register_number=user_in.register_number.strip(),
         department=user_in.department.strip(),
-        batch=user_in.batch.strip(),
+        batch=user_in.batch.strip() if user_in.batch else "",
         class_name=user_in.class_name.strip() if user_in.class_name else None,
         is_active=True,
         is_superuser=False,
