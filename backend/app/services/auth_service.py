@@ -10,6 +10,7 @@ from app.utils.enums import UserRole
 
 LOGIN_RATE_LIMIT_ATTEMPTS = 5
 LOGIN_RATE_LIMIT_SECONDS = 15 * 60
+STUDENT_EMAIL_DOMAIN = "stellamaryscoe.edu.in"
 
 
 def normalize_email(email: str) -> str:
@@ -43,6 +44,41 @@ def create_user(db: Session, user_in: UserCreate) -> User:
     db.commit()
     db.refresh(user)
     return user
+
+
+def create_student_user(db: Session, user_in: UserCreate) -> User:
+    email = normalize_email(user_in.email)
+    if not email.endswith(f"@{STUDENT_EMAIL_DOMAIN}"):
+        raise ValueError("Use your official Stella Mary’s institutional email address.")
+
+    if not user_in.full_name or not user_in.full_name.strip():
+        raise ValueError("Full name is required.")
+
+    if not user_in.password:
+        raise ValueError("Password is required.")
+
+    if not user_in.register_number or not user_in.register_number.strip():
+        raise ValueError("Register number is required.")
+
+    if not user_in.department or not user_in.department.strip():
+        raise ValueError("Department is required.")
+
+    if not user_in.batch or not user_in.batch.strip():
+        raise ValueError("Batch is required.")
+
+    student_in = UserCreate(
+        email=email,
+        full_name=user_in.full_name.strip(),
+        password=user_in.password,
+        role=UserRole.STUDENT,
+        register_number=user_in.register_number.strip(),
+        department=user_in.department.strip(),
+        batch=user_in.batch.strip(),
+        class_name=user_in.class_name.strip() if user_in.class_name else None,
+        is_active=True,
+        is_superuser=False,
+    )
+    return create_user(db, student_in)
 
 
 def authenticate_user(db: Session, email: str, password: str) -> User | None:

@@ -1,4 +1,4 @@
-import { createElement, useCallback, useEffect, useState } from 'react'
+import { createElement, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertTriangle,
   BookOpenCheck,
@@ -7,10 +7,12 @@ import {
   Flag,
   Loader2,
   LogOut,
+  PlusCircle,
   Save,
   Send,
   ShieldCheck,
   Trash2,
+  UserPlus,
   UserRound,
   Users,
 } from 'lucide-react'
@@ -20,6 +22,7 @@ import './index.css'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000/api/v1'
 const AUTH_STORAGE_KEY = 'exam_portal_auth'
+const STUDENT_EMAIL_DOMAIN = '@stellamaryscoe.edu.in'
 
 const demoAccounts = {
   student: {
@@ -55,15 +58,32 @@ function formatApiErrorDetail(detail) {
   return ''
 }
 
+class ApiError extends Error {
+  constructor(message, status = 0) {
+    super(message)
+    this.name = 'ApiError'
+    this.status = status
+  }
+}
+
+function isAuthExpiredError(error) {
+  return error?.status === 401 || error?.status === 403
+}
+
 async function apiRequest(path, { method = 'GET', token, body } = {}) {
-  const response = await fetch(`${API_BASE_URL}${path}`, {
-    method,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    },
-    body: body ? JSON.stringify(body) : undefined,
-  })
+  let response
+  try {
+    response = await fetch(`${API_BASE_URL}${path}`, {
+      method,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: body ? JSON.stringify(body) : undefined,
+    })
+  } catch {
+    throw new ApiError('Unable to connect to the server. Please make sure the backend is running.')
+  }
 
   if (!response.ok) {
     let message = 'Something went wrong. Please try again.'
@@ -73,7 +93,7 @@ async function apiRequest(path, { method = 'GET', token, body } = {}) {
     } catch {
       message = response.statusText || message
     }
-    throw new Error(message)
+    throw new ApiError(message, response.status)
   }
 
   if (response.status === 204) {
@@ -81,6 +101,14 @@ async function apiRequest(path, { method = 'GET', token, body } = {}) {
   }
 
   return response.json()
+}
+
+function handleAuthenticatedError(error, onAuthExpired) {
+  if (isAuthExpiredError(error)) {
+    onAuthExpired()
+    return true
+  }
+  return false
 }
 
 function readStoredAuth() {
@@ -104,6 +132,80 @@ function mapSubmissionAnswers(submission) {
   return { answers, review }
 }
 
+function formatStudentExamError(message) {
+  const normalizedMessage = message?.toLowerCase() ?? ''
+
+  if (normalizedMessage.includes('already submitted')) {
+    return 'You have already completed this exam.'
+  }
+
+  if (normalizedMessage.includes('already started or submitted')) {
+    return 'This exam attempt is no longer available.'
+  }
+
+  if (normalizedMessage.includes('exam time has expired')) {
+    return 'Your exam session has expired.'
+  }
+
+  if (normalizedMessage.includes('exam has ended')) {
+    return 'This exam has ended.'
+  }
+
+  if (normalizedMessage.includes('exam has not started')) {
+    return 'This exam has not started yet.'
+  }
+
+  if (normalizedMessage.includes('answer every question')) {
+    return 'Please answer every question before submitting this exam.'
+  }
+
+  return message || 'Unable to continue this exam right now.'
+}
+
+function getAttemptDeadline(submission, exam) {
+  const startedAt = submission?.started_at ? new Date(submission.started_at) : null
+  const endsAt = exam.ends_at ? new Date(exam.ends_at) : null
+  const hasValidEndsAt = endsAt && !Number.isNaN(endsAt.getTime())
+  const durationMinutes = Number(exam.duration_minutes)
+
+  if (!startedAt || Number.isNaN(startedAt.getTime())) {
+    return hasValidEndsAt ? endsAt : null
+  }
+
+  if (!Number.isFinite(durationMinutes) || durationMinutes < 1) {
+    return hasValidEndsAt ? endsAt : null
+  }
+
+  const durationDeadline = new Date(startedAt.getTime() + durationMinutes * 60 * 1000)
+
+  if (hasValidEndsAt && endsAt < durationDeadline) {
+    return endsAt
+  }
+
+  return durationDeadline
+}
+
+function formatRemainingTime(totalSeconds) {
+  const safeSeconds = Math.max(0, totalSeconds)
+  const hours = Math.floor(safeSeconds / 3600)
+  const minutes = Math.floor((safeSeconds % 3600) / 60)
+  const seconds = safeSeconds % 60
+  const parts = hours > 0 ? [hours, minutes, seconds] : [minutes, seconds]
+  return parts.map((part) => String(part).padStart(2, '0')).join(':')
+}
+
+function getQuestionStatusLabel(status) {
+  const labels = {
+    'not-visited': 'Not visited',
+    'not-answered': 'Not answered',
+    answered: 'Answered',
+    marked: 'Marked for review',
+    'answered-marked': 'Answered and marked',
+  }
+
+  return labels[status] ?? status
+}
+
 function App() {
   const [auth, setAuth] = useState(readStoredAuth)
 
@@ -117,6 +219,11 @@ function App() {
     setAuth(null)
   }
 
+  function handleAuthExpired() {
+    localStorage.removeItem(AUTH_STORAGE_KEY)
+    setAuth(null)
+  }
+
   if (!auth) {
     return <LoginScreen onAuthenticated={handleAuthenticated} />
   }
@@ -125,22 +232,36 @@ function App() {
     <div className="app-shell">
       <TopBar user={auth.user} onLogout={handleLogout} />
       {auth.user.role === 'admin' ? (
-        <AdminDashboard token={auth.access_token} />
+        <AdminDashboard token={auth.access_token} onAuthExpired={handleAuthExpired} />
       ) : (
-        <StudentDashboard token={auth.access_token} user={auth.user} />
+        <StudentDashboard token={auth.access_token} user={auth.user} onAuthExpired={handleAuthExpired} />
       )}
     </div>
   )
 }
 
 function LoginScreen({ onAuthenticated }) {
+  const [mode, setMode] = useState('signin')
   const [credentials, setCredentials] = useState(demoAccounts.student)
+  const [signup, setSignup] = useState({
+    full_name: '',
+    email: '',
+    register_number: '',
+    department: '',
+    batch: '',
+    class_name: '',
+    password: '',
+    confirmPassword: '',
+  })
   const [isLoading, setIsLoading] = useState(false)
+  const [isRegistering, setIsRegistering] = useState(false)
   const [error, setError] = useState('')
+  const [success, setSuccess] = useState('')
 
-  async function handleSubmit(event) {
+  async function handleLoginSubmit(event) {
     event.preventDefault()
     setError('')
+    setSuccess('')
     setIsLoading(true)
     try {
       const data = await apiRequest('/auth/login', {
@@ -155,9 +276,80 @@ function LoginScreen({ onAuthenticated }) {
     }
   }
 
+  function validateSignup() {
+    const fullName = signup.full_name.trim()
+    const email = signup.email.trim().toLowerCase()
+    const registerNumber = signup.register_number.trim()
+    const department = signup.department.trim()
+    const batch = signup.batch.trim()
+
+    if (!fullName) return 'Full name is required.'
+    if (!email) return 'Institutional email is required.'
+    if (!email.endsWith(STUDENT_EMAIL_DOMAIN)) {
+      return 'Use your official Stella Mary’s institutional email address.'
+    }
+    if (!registerNumber) return 'Register number is required.'
+    if (!department) return 'Department is required.'
+    if (!batch) return 'Batch is required.'
+    if (!signup.password) return 'Password is required.'
+    if (signup.password !== signup.confirmPassword) return 'Confirm password must match.'
+
+    return ''
+  }
+
+  async function handleSignupSubmit(event) {
+    event.preventDefault()
+    setError('')
+    setSuccess('')
+
+    const validationError = validateSignup()
+    if (validationError) {
+      setError(validationError)
+      return
+    }
+
+    setIsRegistering(true)
+    try {
+      await apiRequest('/auth/register', {
+        method: 'POST',
+        body: {
+          email: signup.email.trim().toLowerCase(),
+          full_name: signup.full_name.trim(),
+          password: signup.password,
+          role: 'student',
+          register_number: signup.register_number.trim(),
+          department: signup.department.trim(),
+          batch: signup.batch.trim(),
+          class_name: signup.class_name.trim() || null,
+          is_active: true,
+          is_superuser: false,
+        },
+      })
+      setCredentials({ email: signup.email.trim().toLowerCase(), password: '' })
+      setSignup({
+        full_name: '',
+        email: '',
+        register_number: '',
+        department: '',
+        batch: '',
+        class_name: '',
+        password: '',
+        confirmPassword: '',
+      })
+      setMode('signin')
+      setSuccess('Account created successfully. Please sign in.')
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setIsRegistering(false)
+    }
+  }
+
   function fillDemoAccount(account) {
     setCredentials(demoAccounts[account])
     setError('')
+    setSuccess('')
+    setMode('signin')
   }
 
   return (
@@ -178,57 +370,193 @@ function LoginScreen({ onAuthenticated }) {
         </div>
       </section>
 
-      <section className="login-card" aria-label="Sign in">
+      <section className="login-card" aria-label="Authentication">
         <div className="section-heading compact">
-          <ShieldCheck size={22} aria-hidden="true" />
+          {mode === 'signin' ? (
+            <ShieldCheck size={22} aria-hidden="true" />
+          ) : (
+            <UserPlus size={22} aria-hidden="true" />
+          )}
           <div>
-            <p className="eyebrow">Sign in</p>
-            <h2>Continue to dashboard</h2>
+            <p className="eyebrow">{mode === 'signin' ? 'Sign in' : 'Student registration'}</p>
+            <h2>{mode === 'signin' ? 'Continue to dashboard' : 'Create student account'}</h2>
           </div>
         </div>
 
-        <div className="segmented-control" aria-label="Demo account">
-          <button type="button" onClick={() => fillDemoAccount('student')}>
-            <UserRound size={16} aria-hidden="true" />
-            Student
-          </button>
-          <button type="button" onClick={() => fillDemoAccount('admin')}>
+        <div className="segmented-control auth-tabs" aria-label="Authentication mode">
+          <button
+            className={mode === 'signin' ? 'active' : ''}
+            type="button"
+            onClick={() => {
+              setMode('signin')
+              setError('')
+            }}
+          >
             <ShieldCheck size={16} aria-hidden="true" />
-            Admin
+            Sign In
+          </button>
+          <button
+            className={mode === 'signup' ? 'active' : ''}
+            type="button"
+            onClick={() => {
+              setMode('signup')
+              setError('')
+              setSuccess('')
+            }}
+          >
+            <UserPlus size={16} aria-hidden="true" />
+            Student Sign Up
           </button>
         </div>
 
-        <form className="form-grid" onSubmit={handleSubmit}>
-          <label>
-            Email
-            <input
-              type="email"
-              value={credentials.email}
-              onChange={(event) =>
-                setCredentials((current) => ({ ...current, email: event.target.value }))
-              }
-              autoComplete="email"
-              required
-            />
-          </label>
-          <label>
-            Password
-            <input
-              type="password"
-              value={credentials.password}
-              onChange={(event) =>
-                setCredentials((current) => ({ ...current, password: event.target.value }))
-              }
-              autoComplete="current-password"
-              required
-            />
-          </label>
-          {error ? <p className="form-error">{error}</p> : null}
-          <button className="primary-button" type="submit" disabled={isLoading}>
-            {isLoading ? <Loader2 className="spin" size={18} aria-hidden="true" /> : null}
-            Sign in
-          </button>
-        </form>
+        {mode === 'signin' ? (
+          <>
+            <div className="segmented-control login-role-switch" aria-label="Login account">
+              <button type="button" onClick={() => fillDemoAccount('student')}>
+                <UserRound size={16} aria-hidden="true" />
+                Student Login
+              </button>
+              <button type="button" onClick={() => fillDemoAccount('admin')}>
+                <ShieldCheck size={16} aria-hidden="true" />
+                Admin Login
+              </button>
+            </div>
+
+            <form className="form-grid" onSubmit={handleLoginSubmit}>
+              <label>
+                Email
+                <input
+                  type="email"
+                  value={credentials.email}
+                  onChange={(event) =>
+                    setCredentials((current) => ({ ...current, email: event.target.value }))
+                  }
+                  autoComplete="email"
+                  required
+                />
+              </label>
+              <label>
+                Password
+                <input
+                  type="password"
+                  value={credentials.password}
+                  onChange={(event) =>
+                    setCredentials((current) => ({ ...current, password: event.target.value }))
+                  }
+                  autoComplete="current-password"
+                  required
+                />
+              </label>
+              {error ? <p className="form-error">{error}</p> : null}
+              {success ? <p className="form-success">{success}</p> : null}
+              <button className="primary-button" type="submit" disabled={isLoading}>
+                {isLoading ? <Loader2 className="spin" size={18} aria-hidden="true" /> : null}
+                Sign in
+              </button>
+            </form>
+          </>
+        ) : (
+          <form className="form-grid signup-form" onSubmit={handleSignupSubmit}>
+            <label>
+              Full Name
+              <input
+                value={signup.full_name}
+                onChange={(event) =>
+                  setSignup((current) => ({ ...current, full_name: event.target.value }))
+                }
+                autoComplete="name"
+                required
+              />
+            </label>
+            <label>
+              Institutional Email
+              <input
+                type="email"
+                value={signup.email}
+                onChange={(event) =>
+                  setSignup((current) => ({ ...current, email: event.target.value }))
+                }
+                autoComplete="email"
+                placeholder="name@stellamaryscoe.edu.in"
+                required
+              />
+            </label>
+            <div className="form-two-column">
+              <label>
+                Password
+                <input
+                  type="password"
+                  value={signup.password}
+                  onChange={(event) =>
+                    setSignup((current) => ({ ...current, password: event.target.value }))
+                  }
+                  autoComplete="new-password"
+                  required
+                />
+              </label>
+              <label>
+                Confirm Password
+                <input
+                  type="password"
+                  value={signup.confirmPassword}
+                  onChange={(event) =>
+                    setSignup((current) => ({ ...current, confirmPassword: event.target.value }))
+                  }
+                  autoComplete="new-password"
+                  required
+                />
+              </label>
+            </div>
+            <div className="form-two-column">
+              <label>
+                Register Number / Roll Number
+                <input
+                  value={signup.register_number}
+                  onChange={(event) =>
+                    setSignup((current) => ({ ...current, register_number: event.target.value }))
+                  }
+                  required
+                />
+              </label>
+              <label>
+                Department
+                <input
+                  value={signup.department}
+                  onChange={(event) =>
+                    setSignup((current) => ({ ...current, department: event.target.value }))
+                  }
+                  required
+                />
+              </label>
+            </div>
+            <div className="form-two-column">
+              <label>
+                Batch
+                <input
+                  value={signup.batch}
+                  onChange={(event) =>
+                    setSignup((current) => ({ ...current, batch: event.target.value }))
+                  }
+                  required
+                />
+              </label>
+              <label>
+                Class Name
+                <input
+                  value={signup.class_name}
+                  onChange={(event) =>
+                    setSignup((current) => ({ ...current, class_name: event.target.value }))
+                  }
+                />
+              </label>
+            </div>
+            {error ? <p className="form-error">{error}</p> : null}
+            <button className="primary-button" type="submit" disabled={isRegistering}>
+              {isRegistering ? <Loader2 className="spin" size={18} aria-hidden="true" /> : null}
+              Create account
+            </button>
+          </form>
+        )}
       </section>
     </main>
   )
@@ -257,7 +585,7 @@ function TopBar({ user, onLogout }) {
   )
 }
 
-function StudentDashboard({ token, user }) {
+function StudentDashboard({ token, user, onAuthExpired }) {
   const [exams, setExams] = useState([])
   const [activeExam, setActiveExam] = useState(null)
   const [activeSubmission, setActiveSubmission] = useState(null)
@@ -270,7 +598,7 @@ function StudentDashboard({ token, user }) {
   const selectedCount = Object.values(answers).filter(Boolean).length
   const reviewCount = Object.values(review).filter(Boolean).length
   const totalQuestions = activeExam?.questions?.length ?? 0
-  const canSubmit = activeExam && selectedCount === totalQuestions && totalQuestions > 0
+  const canSubmit = activeExam && totalQuestions > 0
 
   const loadStudentData = useCallback(async () => {
     setStatus({ loading: true, error: '', success: '' })
@@ -282,11 +610,12 @@ function StudentDashboard({ token, user }) {
       setExams(examData)
       setSubmissions(submissionData)
     } catch (err) {
-      setStatus({ loading: false, error: err.message, success: '' })
+      if (handleAuthenticatedError(err, onAuthExpired)) return
+      setStatus({ loading: false, error: formatStudentExamError(err.message), success: '' })
       return
     }
     setStatus({ loading: false, error: '', success: '' })
-  }, [token])
+  }, [onAuthExpired, token])
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -302,11 +631,12 @@ function StudentDashboard({ token, user }) {
           token,
           body: { event_type: eventType, details },
         })
-      } catch {
+      } catch (err) {
+        if (handleAuthenticatedError(err, onAuthExpired)) return
         // Proctor events should not interrupt the exam-taking flow.
       }
     },
-    [activeExam, token],
+    [activeExam, onAuthExpired, token],
   )
 
   async function startExam(exam) {
@@ -320,7 +650,8 @@ function StudentDashboard({ token, user }) {
       setReview(mapped.review)
       setResult(null)
     } catch (err) {
-      setStatus({ loading: false, error: err.message, success: '' })
+      if (handleAuthenticatedError(err, onAuthExpired)) return
+      setStatus({ loading: false, error: formatStudentExamError(err.message), success: '' })
       return
     }
     setStatus({ loading: false, error: '', success: '' })
@@ -344,8 +675,11 @@ function StudentDashboard({ token, user }) {
       setAnswers(mapped.answers)
       setReview(mapped.review)
       setStatus({ loading: false, error: '', success: 'Answer saved.' })
+      return true
     } catch (err) {
-      setStatus({ loading: false, error: err.message, success: '' })
+      if (handleAuthenticatedError(err, onAuthExpired)) return
+      setStatus({ loading: false, error: formatStudentExamError(err.message), success: '' })
+      return false
     }
   }
 
@@ -355,17 +689,27 @@ function StudentDashboard({ token, user }) {
     const nextReview = { ...review, [questionId]: false }
     setAnswers(nextAnswers)
     setReview(nextReview)
-    await saveAnswer(questionId, null, false)
+    return saveAnswer(questionId, null, false)
   }
 
   async function toggleReview(questionId) {
     const nextReviewValue = !review[questionId]
     setReview((current) => ({ ...current, [questionId]: nextReviewValue }))
-    await saveAnswer(questionId, answers[questionId] ?? null, nextReviewValue)
+    return saveAnswer(questionId, answers[questionId] ?? null, nextReviewValue)
   }
 
-  async function submitExam() {
+  async function submitExam({ skipConfirmation = false, auto = false } = {}) {
     if (!canSubmit) return
+    const unansweredCount = Math.max(0, totalQuestions - selectedCount)
+
+    if (!skipConfirmation) {
+      const message =
+        unansweredCount > 0
+          ? `You have ${unansweredCount} unanswered question(s). Submit anyway?`
+          : 'Are you sure you want to submit the exam?'
+      if (!window.confirm(message)) return
+    }
+
     setStatus({ loading: true, error: '', success: '' })
     try {
       const data = await apiRequest(`/exams/${activeExam.id}/submit`, {
@@ -385,7 +729,14 @@ function StudentDashboard({ token, user }) {
       setReview({})
       await loadStudentData()
     } catch (err) {
-      setStatus({ loading: false, error: err.message, success: '' })
+      if (handleAuthenticatedError(err, onAuthExpired)) return
+      setStatus({
+        loading: false,
+        error: auto
+          ? `Time is over. ${formatStudentExamError(err.message)}`
+          : formatStudentExamError(err.message),
+        success: '',
+      })
     }
   }
 
@@ -414,6 +765,7 @@ function StudentDashboard({ token, user }) {
           answers={answers}
           review={review}
           setAnswers={setAnswers}
+          user={user}
           selectedCount={selectedCount}
           canSubmit={canSubmit}
           isLoading={status.loading}
@@ -483,6 +835,7 @@ function ExamAttempt({
   answers,
   review,
   setAnswers,
+  user,
   selectedCount,
   canSubmit,
   isLoading,
@@ -493,6 +846,47 @@ function ExamAttempt({
   onCancel,
   onProctorEvent,
 }) {
+  const questions = useMemo(() => exam.questions ?? [], [exam.questions])
+  const [currentIndex, setCurrentIndex] = useState(0)
+  const [visited, setVisited] = useState(() =>
+    questions[0] ? { [questions[0].id]: true } : {},
+  )
+  const autoSubmitRef = useRef(false)
+  const deadline = useMemo(() => getAttemptDeadline(submission, exam), [exam, submission])
+  const [remainingSeconds, setRemainingSeconds] = useState(() =>
+    deadline ? Math.max(0, Math.floor((deadline.getTime() - Date.now()) / 1000)) : 0,
+  )
+  const currentQuestion = questions[currentIndex] ?? questions[0]
+  const totalQuestions = questions.length
+  const unansweredCount = Math.max(0, totalQuestions - selectedCount)
+  const markedCount = Object.values(review).filter(Boolean).length
+  const isLastQuestion = currentIndex >= totalQuestions - 1
+  const isFirstQuestion = currentIndex === 0
+  const isUrgent = Boolean(deadline) && remainingSeconds <= 60
+  const currentStatus = currentQuestion ? getQuestionStatus(currentQuestion) : 'not-visited'
+
+  useEffect(() => {
+    autoSubmitRef.current = false
+  }, [submission?.id])
+
+  useEffect(() => {
+    if (!deadline) return undefined
+
+    function updateRemainingTime() {
+      setRemainingSeconds(Math.max(0, Math.floor((deadline.getTime() - Date.now()) / 1000)))
+    }
+
+    updateRemainingTime()
+    const timerId = window.setInterval(updateRemainingTime, 1000)
+    return () => window.clearInterval(timerId)
+  }, [deadline])
+
+  useEffect(() => {
+    if (!deadline || remainingSeconds > 0 || autoSubmitRef.current) return
+    autoSubmitRef.current = true
+    void onSubmit({ skipConfirmation: true, auto: true })
+  }, [deadline, onSubmit, remainingSeconds])
+
   useEffect(() => {
     function logVisibility() {
       if (document.visibilityState === 'hidden') {
@@ -521,109 +915,203 @@ function ExamAttempt({
     }
   }, [onProctorEvent])
 
+  function getQuestionStatus(question) {
+    const isAnswered = Boolean(answers[question.id])
+    const isMarked = Boolean(review[question.id])
+    const isVisited = Boolean(visited[question.id])
+
+    if (isAnswered && isMarked) return 'answered-marked'
+    if (isMarked) return 'marked'
+    if (isAnswered) return 'answered'
+    if (isVisited) return 'not-answered'
+    return 'not-visited'
+  }
+
+  function goToQuestion(index) {
+    const nextIndex = Math.max(0, Math.min(index, totalQuestions - 1))
+    const nextQuestion = questions[nextIndex]
+    if (nextQuestion) {
+      setVisited((current) =>
+        current[nextQuestion.id] ? current : { ...current, [nextQuestion.id]: true },
+      )
+    }
+    setCurrentIndex(nextIndex)
+  }
+
+  async function saveAndNext() {
+    if (!currentQuestion) return
+    const didSave = await onSave(
+      currentQuestion.id,
+      answers[currentQuestion.id] ?? null,
+      review[currentQuestion.id] ?? false,
+    )
+    if (didSave && !isLastQuestion) {
+      goToQuestion(currentIndex + 1)
+    }
+  }
+
+  async function clearCurrentResponse() {
+    if (!currentQuestion) return
+    await onClear(currentQuestion.id)
+  }
+
+  async function toggleCurrentReview() {
+    if (!currentQuestion) return
+    await onToggleReview(currentQuestion.id)
+  }
+
+  if (!currentQuestion) {
+    return (
+      <section className="attempt-layout">
+        <p className="empty-state">No questions are available for this exam.</p>
+      </section>
+    )
+  }
+
   return (
     <section className="attempt-layout">
-      <div className="attempt-header">
-        <div>
-          <p className="eyebrow">In progress</p>
-          <h2>{exam.title}</h2>
-          <p>
-            {exam.duration_minutes} minutes · attempt #{submission?.id}
-          </p>
+      <div className="exam-attempt-screen">
+        <div className="exam-attempt-topbar">
+          <div>
+            <p className="eyebrow">In progress</p>
+            <h2>{exam.title}</h2>
+            <p>{user.full_name} - {user.email}</p>
+          </div>
+          <div className="attempt-topbar-actions">
+            <span className={`timer-pill ${isUrgent ? 'urgent' : ''}`}>
+              {deadline ? formatRemainingTime(remainingSeconds) : '--:--'}
+            </span>
+            <button className="primary-button" type="button" disabled={!canSubmit || isLoading} onClick={() => onSubmit()}>
+              {isLoading ? <Loader2 className="spin" size={18} aria-hidden="true" /> : <Send size={18} aria-hidden="true" />}
+              Submit exam
+            </button>
+            <button className="secondary-button" type="button" disabled={isLoading} onClick={onCancel}>
+              Leave
+            </button>
+          </div>
         </div>
-        <div className="attempt-actions">
-          <span className="progress-pill">
-            {selectedCount}/{exam.questions.length} answered
-          </span>
-          <button className="secondary-button" type="button" onClick={onCancel}>
-            Leave
-          </button>
-        </div>
-      </div>
 
-      <div className="question-status-grid" aria-label="Question status">
-        {exam.questions.map((question, index) => (
-          <span
-            className={`question-status ${answers[question.id] ? 'answered' : ''} ${review[question.id] ? 'review' : ''}`}
-            key={question.id}
-          >
-            {index + 1}
-          </span>
-        ))}
-      </div>
+        <div className="exam-attempt-grid">
+          <section className="attempt-question-card" aria-label="Current question">
+            <div className="question-card-header">
+              <div>
+                <p className="eyebrow">Question {currentIndex + 1} of {totalQuestions}</p>
+                <h3>{currentQuestion.prompt}</h3>
+              </div>
+              <span className={`question-state-badge ${currentStatus}`}>
+                {getQuestionStatusLabel(currentStatus)}
+              </span>
+            </div>
 
-      <div className="question-stack">
-        {exam.questions.map((question, index) => (
-          <fieldset className="question-panel" key={question.id}>
-            <legend>
-              {index + 1}. {question.prompt}
-            </legend>
-            <div className="option-grid">
-              {question.options.map((option) => (
-                <label className="option-row" key={option.id}>
+            <div className="attempt-option-list">
+              {currentQuestion.options.map((option) => (
+                <label
+                  className={`attempt-option-card ${answers[currentQuestion.id] === option.id ? 'selected' : ''}`}
+                  key={option.id}
+                >
                   <input
                     type="radio"
-                    name={`question-${question.id}`}
-                    checked={answers[question.id] === option.id}
+                    name={`current-question-${currentQuestion.id}`}
+                    checked={answers[currentQuestion.id] === option.id}
                     onChange={() =>
-                      setAnswers((current) => ({ ...current, [question.id]: option.id }))
+                      setAnswers((current) => ({ ...current, [currentQuestion.id]: option.id }))
                     }
                   />
                   <span>{option.text}</span>
                 </label>
               ))}
             </div>
-            <div className="answer-actions">
+
+            <div className="attempt-button-row">
               <button
                 className="secondary-button"
                 type="button"
-                onClick={() => onSave(question.id)}
-                disabled={isLoading}
+                disabled={isFirstQuestion || isLoading}
+                onClick={() => goToQuestion(currentIndex - 1)}
               >
-                <Save size={16} aria-hidden="true" />
-                Save
+                Previous
               </button>
-              <button
-                className="secondary-button"
-                type="button"
-                onClick={() => onClear(question.id)}
-                disabled={isLoading}
-              >
+              <button className="secondary-button" type="button" disabled={isLoading} onClick={clearCurrentResponse}>
                 <Trash2 size={16} aria-hidden="true" />
-                Unsave
+                Clear Response
               </button>
               <button
-                className={`secondary-button ${review[question.id] ? 'review-active' : ''}`}
+                className={`secondary-button ${review[currentQuestion.id] ? 'review-active' : ''}`}
                 type="button"
-                onClick={() => onToggleReview(question.id)}
                 disabled={isLoading}
+                onClick={toggleCurrentReview}
               >
                 <Flag size={16} aria-hidden="true" />
-                {review[question.id] ? 'Unmark review' : 'Review'}
+                {review[currentQuestion.id] ? 'Unmark Review' : 'Mark for Review'}
+              </button>
+              <button className="primary-button" type="button" disabled={isLoading} onClick={saveAndNext}>
+                {isLoading ? <Loader2 className="spin" size={18} aria-hidden="true" /> : <Save size={16} aria-hidden="true" />}
+                {isLastQuestion ? 'Save' : 'Save & Next'}
+              </button>
+              <button
+                className="secondary-button"
+                type="button"
+                disabled={isLastQuestion || isLoading}
+                onClick={() => goToQuestion(currentIndex + 1)}
+              >
+                Next
               </button>
             </div>
-          </fieldset>
-        ))}
-      </div>
+          </section>
 
-      <button
-        className="primary-button submit-button"
-        type="button"
-        disabled={!canSubmit || isLoading}
-        onClick={onSubmit}
-      >
-        {isLoading ? <Loader2 className="spin" size={18} aria-hidden="true" /> : <Send size={18} aria-hidden="true" />}
-        Submit exam
-      </button>
+          <aside className="attempt-palette" aria-label="Question palette">
+            <div className="palette-summary">
+              <div>
+                <strong>{selectedCount}</strong>
+                <span>Answered</span>
+              </div>
+              <div>
+                <strong>{unansweredCount}</strong>
+                <span>Not answered</span>
+              </div>
+              <div>
+                <strong>{markedCount}</strong>
+                <span>Marked</span>
+              </div>
+            </div>
+
+            <div className="palette-grid">
+              {questions.map((question, index) => {
+                const state = getQuestionStatus(question)
+                return (
+                  <button
+                    className={`palette-item ${state} ${currentIndex === index ? 'active' : ''}`}
+                    type="button"
+                    key={question.id}
+                    onClick={() => goToQuestion(index)}
+                    aria-label={`Question ${index + 1}: ${getQuestionStatusLabel(state)}`}
+                  >
+                    {index + 1}
+                  </button>
+                )
+              })}
+            </div>
+
+            <div className="palette-legend">
+              <span><i className="legend-dot not-visited" /> Not visited</span>
+              <span><i className="legend-dot not-answered" /> Not answered</span>
+              <span><i className="legend-dot answered" /> Answered</span>
+              <span><i className="legend-dot marked" /> Marked</span>
+              <span><i className="legend-dot answered-marked" /> Answered & marked</span>
+            </div>
+          </aside>
+        </div>
+      </div>
     </section>
   )
 }
 
-function AdminDashboard({ token }) {
+function AdminDashboard({ token, onAuthExpired }) {
   const [exams, setExams] = useState([])
   const [selectedExam, setSelectedExam] = useState(null)
   const [submissions, setSubmissions] = useState([])
   const [status, setStatus] = useState({ loading: true, error: '', success: '' })
+  const [isCreatingExam, setIsCreatingExam] = useState(false)
 
   const loadAdminData = useCallback(
     async (examId = null) => {
@@ -641,12 +1129,13 @@ function AdminDashboard({ token }) {
           setSubmissions(submissionData)
         }
       } catch (err) {
+        if (handleAuthenticatedError(err, onAuthExpired)) return
         setStatus({ loading: false, error: err.message, success: '' })
         return
       }
       setStatus({ loading: false, error: '', success: '' })
     },
-    [token],
+    [onAuthExpired, token],
   )
 
   useEffect(() => {
@@ -750,7 +1239,32 @@ function AdminDashboard({ token }) {
       })
       await loadAdminData(examId)
     } catch (err) {
+      if (handleAuthenticatedError(err, onAuthExpired)) return
       setStatus({ loading: false, error: err.message, success: '' })
+    }
+  }
+
+  async function createNewExam() {
+    if (isCreatingExam) return
+    setIsCreatingExam(true)
+    setStatus({ loading: true, error: '', success: '' })
+    try {
+      const createdExam = await apiRequest('/exams', {
+        method: 'POST',
+        token,
+        body: {
+          title: 'Untitled Exam',
+          duration_minutes: 30,
+          is_published: false,
+        },
+      })
+      setStatus({ loading: false, error: '', success: 'Draft exam created.' })
+      await loadAdminData(createdExam.id)
+    } catch (err) {
+      if (handleAuthenticatedError(err, onAuthExpired)) return
+      setStatus({ loading: false, error: err.message, success: '' })
+    } finally {
+      setIsCreatingExam(false)
     }
   }
 
@@ -765,6 +1279,7 @@ function AdminDashboard({ token }) {
       setStatus({ loading: false, error: '', success: 'Question deleted.' })
       await loadAdminData(selectedExam.id)
     } catch (err) {
+      if (handleAuthenticatedError(err, onAuthExpired)) return
       setStatus({ loading: false, error: err.message, success: '' })
     }
   }
@@ -779,6 +1294,7 @@ function AdminDashboard({ token }) {
       })
       await loadAdminData(exam.id)
     } catch (err) {
+      if (handleAuthenticatedError(err, onAuthExpired)) return
       setStatus({ loading: false, error: err.message, success: '' })
     }
   }
@@ -803,7 +1319,22 @@ function AdminDashboard({ token }) {
 
       <section className="content-grid admin-grid">
         <div className="main-column">
-          <SectionTitle icon={ClipboardList} eyebrow="Catalog" title="All exams" />
+          <div className="section-title-row">
+            <SectionTitle icon={ClipboardList} eyebrow="Catalog" title="All exams" />
+            <button
+              className="primary-button"
+              type="button"
+              onClick={createNewExam}
+              disabled={isCreatingExam || status.loading}
+            >
+              {isCreatingExam ? (
+                <Loader2 className="spin" size={18} aria-hidden="true" />
+              ) : (
+                <PlusCircle size={18} aria-hidden="true" />
+              )}
+              Add New Exam
+            </button>
+          </div>
           {status.loading && exams.length === 0 ? <LoadingBlock label="Loading exams" /> : null}
           <div className="exam-list">
             {exams.map((exam) => (
