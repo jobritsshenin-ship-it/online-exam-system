@@ -5,8 +5,10 @@ from app.api.deps.auth import get_current_user, get_db, require_admin
 from app.models.user import User
 from app.schemas.exam import (
     ExamAdminRead,
+    ExamArchive,
     ExamCreate,
     ExamPublish,
+    ExamResultPublish,
     ExamRead,
     ExamUpdate,
     QuestionAdminRead,
@@ -16,11 +18,13 @@ from app.schemas.exam import (
     SubmissionCreate,
     SubmissionEventCreate,
     SubmissionRead,
+    StudentSubmissionRead,
 )
 from app.services.exam_service import (
     add_question,
     add_questions_bulk,
     create_exam,
+    delete_exam,
     delete_question,
     get_exam,
     list_exam_submissions,
@@ -28,7 +32,9 @@ from app.services.exam_service import (
     list_my_submissions,
     record_proctor_event,
     save_answer,
+    set_exam_archived,
     set_exam_published,
+    set_exam_result_published,
     start_exam,
     submit_exam,
     update_exam,
@@ -50,6 +56,40 @@ def _raise_bad_request(exc: ValueError):
         status_code=status.HTTP_400_BAD_REQUEST,
         detail=str(exc),
     ) from exc
+
+
+def _student_submission_response(submission) -> dict:
+    is_result_published = bool(submission.exam and submission.exam.is_result_published)
+    return {
+        "id": submission.id,
+        "exam_id": submission.exam_id,
+        "student_id": submission.student_id,
+        "status": submission.status,
+        "score": submission.score if is_result_published else None,
+        "started_at": submission.started_at,
+        "submitted_at": submission.submitted_at,
+        "is_result_published": is_result_published,
+        "result_message": (
+            "Results have been published."
+            if is_result_published
+            else (
+                "Your exam has been submitted successfully. Results will be published by the admin later."
+                if submission.status.value == "submitted"
+                else "Results will be published by the admin after this exam is submitted."
+            )
+        ),
+        "answers": [
+            {
+                "id": answer.id,
+                "question_id": answer.question_id,
+                "question_prompt": answer.question_prompt,
+                "selected_option_id": answer.selected_option_id,
+                "selected_option_text": answer.selected_option_text,
+                "is_marked_for_review": answer.is_marked_for_review,
+            }
+            for answer in submission.answers
+        ],
+    }
 
 
 @router.get("", response_model=list[ExamRead])
@@ -84,12 +124,12 @@ def update_existing_exam(
         _raise_bad_request(exc)
 
 
-@router.get("/submissions/me", response_model=list[SubmissionRead])
+@router.get("/submissions/me", response_model=list[StudentSubmissionRead])
 def read_my_submissions(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    return list_my_submissions(db, current_user)
+    return [_student_submission_response(submission) for submission in list_my_submissions(db, current_user)]
 
 
 @router.get("/{exam_id}", response_model=ExamRead)
@@ -125,6 +165,50 @@ def update_exam_publish_status(
 ):
     try:
         return set_exam_published(db, exam_id, payload.is_published, current_user)
+    except LookupError as exc:
+        _raise_not_found(exc)
+    except ValueError as exc:
+        _raise_bad_request(exc)
+
+
+@router.patch("/{exam_id}/results-publish", response_model=ExamAdminRead)
+def update_exam_result_publish_status(
+    exam_id: int,
+    payload: ExamResultPublish,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    try:
+        return set_exam_result_published(db, exam_id, payload.is_result_published, current_user)
+    except LookupError as exc:
+        _raise_not_found(exc)
+    except ValueError as exc:
+        _raise_bad_request(exc)
+
+
+@router.patch("/{exam_id}/archive", response_model=ExamAdminRead)
+def update_exam_archive_status(
+    exam_id: int,
+    payload: ExamArchive,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    try:
+        return set_exam_archived(db, exam_id, payload.is_archived, current_user)
+    except LookupError as exc:
+        _raise_not_found(exc)
+    except ValueError as exc:
+        _raise_bad_request(exc)
+
+
+@router.delete("/{exam_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_existing_exam(
+    exam_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    try:
+        delete_exam(db, exam_id, current_user)
     except LookupError as exc:
         _raise_not_found(exc)
     except ValueError as exc:
@@ -192,21 +276,21 @@ def delete_exam_question(
         _raise_bad_request(exc)
 
 
-@router.post("/{exam_id}/start", response_model=SubmissionRead, status_code=status.HTTP_201_CREATED)
+@router.post("/{exam_id}/start", response_model=StudentSubmissionRead, status_code=status.HTTP_201_CREATED)
 def start_exam_attempt(
     exam_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     try:
-        return start_exam(db, exam_id, current_user)
+        return _student_submission_response(start_exam(db, exam_id, current_user))
     except LookupError as exc:
         _raise_not_found(exc)
     except ValueError as exc:
         _raise_bad_request(exc)
 
 
-@router.post("/{exam_id}/answers", response_model=SubmissionRead)
+@router.post("/{exam_id}/answers", response_model=StudentSubmissionRead)
 def save_exam_answer(
     exam_id: int,
     payload: SavedAnswerRequest,
@@ -214,14 +298,14 @@ def save_exam_answer(
     current_user: User = Depends(get_current_user),
 ):
     try:
-        return save_answer(db, exam_id, payload, current_user)
+        return _student_submission_response(save_answer(db, exam_id, payload, current_user))
     except LookupError as exc:
         _raise_not_found(exc)
     except ValueError as exc:
         _raise_bad_request(exc)
 
 
-@router.post("/{exam_id}/submit", response_model=SubmissionRead)
+@router.post("/{exam_id}/submit", response_model=StudentSubmissionRead)
 def submit_exam_attempt(
     exam_id: int,
     payload: SubmissionCreate,
@@ -229,14 +313,14 @@ def submit_exam_attempt(
     current_user: User = Depends(get_current_user),
 ):
     try:
-        return submit_exam(db, exam_id, payload, current_user)
+        return _student_submission_response(submit_exam(db, exam_id, payload, current_user))
     except LookupError as exc:
         _raise_not_found(exc)
     except ValueError as exc:
         _raise_bad_request(exc)
 
 
-@router.post("/{exam_id}/proctoring-events", response_model=SubmissionRead, status_code=status.HTTP_201_CREATED)
+@router.post("/{exam_id}/proctoring-events", response_model=StudentSubmissionRead, status_code=status.HTTP_201_CREATED)
 def record_exam_proctor_event(
     exam_id: int,
     payload: SubmissionEventCreate,
@@ -244,7 +328,7 @@ def record_exam_proctor_event(
     current_user: User = Depends(get_current_user),
 ):
     try:
-        return record_proctor_event(db, exam_id, payload, current_user)
+        return _student_submission_response(record_proctor_event(db, exam_id, payload, current_user))
     except LookupError as exc:
         _raise_not_found(exc)
     except ValueError as exc:

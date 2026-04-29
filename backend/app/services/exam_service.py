@@ -70,6 +70,65 @@ def _build_question(exam_id: int, question_in: QuestionCreate) -> Question:
     return question
 
 
+def _referenced_option_ids(db: Session, option_ids: list[int]) -> set[int]:
+    if not option_ids:
+        return set()
+
+    statement = select(SubmissionAnswer.selected_option_id).where(
+        SubmissionAnswer.selected_option_id.in_(option_ids)
+    )
+    return {option_id for option_id in db.execute(statement).scalars().all() if option_id is not None}
+
+
+def _has_answers_for_question(db: Session, question_id: int) -> bool:
+    statement = select(SubmissionAnswer.id).where(SubmissionAnswer.question_id == question_id).limit(1)
+    return db.execute(statement).scalar_one_or_none() is not None
+
+
+def _sync_question_options(db: Session, question: Question, question_in: QuestionCreate) -> None:
+    existing_options = sorted(question.options, key=lambda option: (option.sort_order, option.id or 0))
+    existing_by_id = {option.id: option for option in existing_options if option.id is not None}
+    next_options: list[QuestionOption] = []
+    used_option_ids: set[int] = set()
+
+    for index, option_in in enumerate(question_in.options):
+        option = None
+        if option_in.id is not None:
+            if option_in.id in used_option_ids:
+                raise ValueError("Question option ids must be unique.")
+            option = existing_by_id.get(option_in.id)
+            if option is None:
+                raise ValueError("Question option not found for this question.")
+        elif index < len(existing_options):
+            candidate = existing_options[index]
+            if candidate.id not in used_option_ids:
+                option = candidate
+
+        if option is None:
+            option = QuestionOption()
+
+        option.text = option_in.text
+        option.is_correct = option_in.is_correct
+        option.sort_order = option_in.sort_order
+        next_options.append(option)
+        if option.id is not None:
+            used_option_ids.add(option.id)
+
+    removed_option_ids = [
+        option.id
+        for option in existing_options
+        if option.id is not None and option.id not in used_option_ids
+    ]
+    referenced_option_ids = _referenced_option_ids(db, removed_option_ids)
+    if referenced_option_ids:
+        raise ValueError(
+            "Cannot remove options from a question that already has submitted answers. "
+            "Edit the existing option text instead."
+        )
+
+    question.options = next_options
+
+
 def _ensure_draft_exam(exam: Exam) -> None:
     if exam.is_published:
         raise ValueError("Published exams cannot be edited. Unpublish this exam first.")
@@ -233,7 +292,10 @@ def _upsert_answer(
 def list_exams(db: Session, current_user: User) -> list[Exam]:
     statement = select(Exam).options(*_exam_options()).order_by(Exam.created_at.desc())
     if current_user.role != UserRole.ADMIN:
-        statement = statement.where(Exam.is_published.is_(True))
+        statement = statement.where(
+            Exam.is_published.is_(True),
+            Exam.is_archived.is_(False),
+        )
     return list(db.execute(statement).scalars().unique().all())
 
 
@@ -243,7 +305,7 @@ def get_exam(db: Session, exam_id: int, current_user: User) -> Exam:
     if not exam:
         raise LookupError("Exam not found.")
 
-    if current_user.role != UserRole.ADMIN and not exam.is_published:
+    if current_user.role != UserRole.ADMIN and (not exam.is_published or exam.is_archived):
         raise LookupError("Exam not found.")
 
     return exam
@@ -258,6 +320,8 @@ def create_exam(db: Session, exam_in: ExamCreate, created_by: User) -> Exam:
         starts_at=exam_in.starts_at,
         ends_at=exam_in.ends_at,
         is_published=False,
+        is_archived=False,
+        is_result_published=False,
         created_by_id=created_by.id,
     )
 
@@ -283,6 +347,8 @@ def update_exam(db: Session, exam_id: int, exam_in: ExamUpdate, current_user: Us
 def set_exam_published(db: Session, exam_id: int, is_published: bool, current_user: User) -> Exam:
     exam = get_exam(db, exam_id, current_user)
     if is_published:
+        if exam.is_archived:
+            raise ValueError("Archived exams cannot be published. Unarchive this exam first.")
         _validate_exam_ready_for_publish(exam)
 
     exam.is_published = is_published
@@ -290,6 +356,36 @@ def set_exam_published(db: Session, exam_id: int, is_published: bool, current_us
     db.add(exam)
     db.commit()
     return get_exam(db, exam.id, current_user)
+
+
+def set_exam_result_published(db: Session, exam_id: int, is_result_published: bool, current_user: User) -> Exam:
+    exam = get_exam(db, exam_id, current_user)
+    exam.is_result_published = is_result_published
+
+    db.add(exam)
+    db.commit()
+    return get_exam(db, exam.id, current_user)
+
+
+def set_exam_archived(db: Session, exam_id: int, is_archived: bool, current_user: User) -> Exam:
+    exam = get_exam(db, exam_id, current_user)
+    exam.is_archived = is_archived
+    if is_archived:
+        exam.is_published = False
+
+    db.add(exam)
+    db.commit()
+    return get_exam(db, exam.id, current_user)
+
+
+def delete_exam(db: Session, exam_id: int, current_user: User) -> None:
+    exam = get_exam(db, exam_id, current_user)
+    submission_statement = select(Submission.id).where(Submission.exam_id == exam.id).limit(1)
+    if db.execute(submission_statement).scalar_one_or_none() is not None:
+        raise ValueError("This exam has submissions and cannot be deleted. Archive it instead.")
+
+    db.delete(exam)
+    db.commit()
 
 
 def add_question(db: Session, exam_id: int, question_in: QuestionCreate, current_user: User) -> Question:
@@ -328,15 +424,7 @@ def update_question(
     question.question_type = question_in.question_type
     question.marks = question_in.marks
     question.sort_order = question_in.sort_order
-    question.options.clear()
-    question.options.extend(
-        QuestionOption(
-            text=option.text,
-            is_correct=option.is_correct,
-            sort_order=option.sort_order,
-        )
-        for option in question_in.options
-    )
+    _sync_question_options(db, question, question_in)
 
     db.add(question)
     db.commit()
@@ -356,6 +444,12 @@ def delete_question(db: Session, exam_id: int, question_id: int, current_user: U
     question = next((item for item in exam.questions if item.id == question_id), None)
     if not question:
         raise LookupError("Question not found.")
+
+    if _has_answers_for_question(db, question.id):
+        raise ValueError(
+            "Cannot delete a question that already has submitted answers. "
+            "Edit the question instead."
+        )
 
     db.delete(question)
     db.commit()

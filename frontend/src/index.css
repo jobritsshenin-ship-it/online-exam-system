@@ -193,6 +193,11 @@ h3 {
   margin-bottom: 14px;
 }
 
+.admin-tabs {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin: 22px 0 0;
+}
+
 .login-role-switch {
   margin-top: 0;
 }
@@ -424,6 +429,10 @@ select:focus {
   grid-template-columns: minmax(0, 0.82fr) minmax(560px, 1.18fr);
 }
 
+.user-management-grid {
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 360px);
+}
+
 .main-column,
 .side-column,
 .details-band {
@@ -463,12 +472,14 @@ select:focus {
 
 .exam-list,
 .submission-list,
-.question-stack {
+.question-stack,
+.user-list {
   display: grid;
   gap: 14px;
 }
 
 .exam-card,
+.user-card,
 .tool-panel,
 .result-panel,
 .question-panel,
@@ -484,6 +495,15 @@ select:focus {
   display: grid;
   gap: 16px;
   padding: 20px;
+}
+
+.user-card {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
 }
 
 .exam-card.selectable {
@@ -519,6 +539,71 @@ select:focus {
   background: #f2f6f5;
   font-size: 0.84rem;
   font-weight: 800;
+}
+
+.card-actions,
+.user-tools,
+.inline-reset-form,
+.modal-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.card-actions {
+  justify-content: flex-start;
+}
+
+.user-tools {
+  justify-content: flex-end;
+}
+
+.user-tools select {
+  width: 150px;
+}
+
+.search-box {
+  position: relative;
+  min-width: 240px;
+}
+
+.search-box svg {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  color: var(--muted);
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+
+.search-box input {
+  padding-left: 38px;
+}
+
+.inline-reset-form {
+  align-items: end;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.inline-reset-form label {
+  flex: 1;
+  min-width: 220px;
+  display: grid;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 0.92rem;
+  font-weight: 700;
+}
+
+.danger-fill-button {
+  border-color: var(--danger);
+  background: var(--danger);
+}
+
+.danger-fill-button:hover {
+  background: #8f1d14;
 }
 
 .side-column {
@@ -730,6 +815,38 @@ select:focus {
   color: var(--danger);
 }
 
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(15, 23, 42, 0.42);
+}
+
+.modal-panel {
+  position: relative;
+  width: min(460px, 100%);
+  display: grid;
+  gap: 18px;
+  padding: 24px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: var(--shadow);
+}
+
+.modal-close {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+}
+
+.modal-actions {
+  justify-content: flex-end;
+}
+
 .csv-dropzone {
   position: relative;
   display: grid;
@@ -823,6 +940,7 @@ select:focus {
 }
 
 .result-panel,
+.submitted-panel,
 .submission-item,
 .loading-block,
 .notice {
@@ -835,6 +953,20 @@ select:focus {
   align-items: center;
   color: var(--success);
   background: #ecfdf3;
+}
+
+.submitted-panel {
+  display: grid;
+  gap: 10px;
+  border: 1px solid rgba(8, 116, 67, 0.24);
+  border-radius: 8px;
+  color: var(--success);
+  background: #ecfdf3;
+}
+
+.submitted-panel p {
+  color: #075b36;
+  line-height: 1.55;
 }
 
 .submission-item {
@@ -1261,6 +1393,10 @@ select:focus {
   margin-top: 30px;
 }
 
+.details-status-row {
+  margin-bottom: 16px;
+}
+
 .compact-stack .question-panel {
   padding: 18px;
 }
@@ -1345,6 +1481,7 @@ select:focus {
   .login-layout,
   .content-grid,
   .admin-grid,
+  .user-management-grid,
   .builder-two-column,
   .builder-three-column,
   .generation-row,
@@ -1401,9 +1538,16 @@ select:focus {
   }
 
   .form-two-column,
-  .section-title-row {
+  .section-title-row,
+  .user-tools {
     grid-template-columns: 1fr;
     flex-direction: column;
+  }
+
+  .user-tools,
+  .search-box,
+  .user-tools select {
+    width: 100%;
   }
 }
 

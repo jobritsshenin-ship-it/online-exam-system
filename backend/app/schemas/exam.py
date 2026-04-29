@@ -15,6 +15,8 @@ class ExamBase(BaseModel):
     starts_at: datetime | None = None
     ends_at: datetime | None = None
     is_published: bool = False
+    is_archived: bool = False
+    is_result_published: bool = False
 
 
 class ExamCreate(ExamBase):
@@ -34,7 +36,16 @@ class ExamPublish(BaseModel):
     is_published: bool
 
 
+class ExamArchive(BaseModel):
+    is_archived: bool
+
+
+class ExamResultPublish(BaseModel):
+    is_result_published: bool
+
+
 class QuestionOptionCreate(BaseModel):
+    id: int | None = None
     text: str = Field(min_length=1)
     is_correct: bool = False
     sort_order: int = 0
@@ -126,6 +137,17 @@ class SubmissionAnswerRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class StudentSubmissionAnswerRead(BaseModel):
+    id: int
+    question_id: int
+    question_prompt: str
+    selected_option_id: int | None
+    selected_option_text: str | None
+    is_marked_for_review: bool
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class SubmissionEventCreate(BaseModel):
     event_type: str = Field(min_length=1, max_length=80)
     details: str | None = Field(default=None, max_length=500)
@@ -161,5 +183,20 @@ class SubmissionRead(BaseModel):
     cheat_event_count: int
     answers: List[SubmissionAnswerRead] = Field(default_factory=list)
     events: List[SubmissionEventRead] = Field(default_factory=list)
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class StudentSubmissionRead(BaseModel):
+    id: int
+    exam_id: int
+    student_id: int
+    status: SubmissionStatus
+    score: int | None = None
+    started_at: datetime
+    submitted_at: datetime | None
+    is_result_published: bool
+    result_message: str
+    answers: List[StudentSubmissionAnswerRead] = Field(default_factory=list)
 
     model_config = ConfigDict(from_attributes=True)

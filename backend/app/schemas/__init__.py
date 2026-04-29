@@ -1,7 +1,9 @@
 from app.schemas.exam import (
     ExamAdminRead,
+    ExamArchive,
     ExamCreate,
     ExamPublish,
+    ExamResultPublish,
     ExamRead,
     ExamUpdate,
     QuestionAdminRead,
@@ -11,12 +13,15 @@ from app.schemas.exam import (
     SubmissionCreate,
     SubmissionEventCreate,
     SubmissionRead,
+    StudentSubmissionRead,
 )
 
 __all__ = [
     "ExamAdminRead",
+    "ExamArchive",
     "ExamCreate",
     "ExamPublish",
+    "ExamResultPublish",
     "ExamRead",
     "ExamUpdate",
     "QuestionAdminRead",
@@ -26,4 +31,5 @@ __all__ = [
     "SubmissionCreate",
     "SubmissionEventCreate",
     "SubmissionRead",
+    "StudentSubmissionRead",
 ]

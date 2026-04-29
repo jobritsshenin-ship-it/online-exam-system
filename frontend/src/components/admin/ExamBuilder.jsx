@@ -21,6 +21,7 @@ function createEmptyQuestion(index = 0) {
     option2: '',
     option3: '',
     option4: '',
+    optionIds: {},
     correctAnswer: 'option1',
     marks: 1,
     explanation: '',
@@ -39,6 +40,12 @@ function fromApiQuestion(question, index) {
     option2: options[1]?.text ?? '',
     option3: options[2]?.text ?? '',
     option4: options[3]?.text ?? '',
+    optionIds: {
+      option1: options[0]?.id ?? null,
+      option2: options[1]?.id ?? null,
+      option3: options[2]?.id ?? null,
+      option4: options[3]?.id ?? null,
+    },
     correctAnswer: `option${correctIndex + 1}`,
     marks: question.marks,
     explanation: question.explanation ?? '',
@@ -56,6 +63,7 @@ function toApiQuestion(question, index) {
     marks: Number(question.marks || 1),
     sort_order: index + 1,
     options: ['option1', 'option2', 'option3', 'option4'].map((field, optionIndex) => ({
+      id: question.optionIds?.[field] ?? null,
       text: question[field].trim(),
       is_correct: optionIndex === correctIndex,
       sort_order: optionIndex + 1,
@@ -186,6 +194,7 @@ export function ExamBuilder({
       ...question,
       clientId: `local-${Date.now()}-${Math.random().toString(16).slice(2)}`,
       backendId: null,
+      optionIds: {},
     }
     setDraftQuestions((current) => [
       ...current.slice(0, index + 1),

@@ -1,20 +1,28 @@
 import { createElement, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertTriangle,
+  Archive,
   BookOpenCheck,
   CheckCircle2,
   ClipboardList,
+  Edit,
+  Eye,
   Flag,
+  KeyRound,
   Loader2,
   LogOut,
   PlusCircle,
   Save,
+  Search,
   Send,
   ShieldCheck,
   Trash2,
+  UserCheck,
   UserPlus,
   UserRound,
+  UserX,
   Users,
+  X,
 } from 'lucide-react'
 import { ExamBuilder } from './components/admin/ExamBuilder'
 import { ExportResultsPanel } from './components/admin/ExportResultsPanel'
@@ -67,7 +75,7 @@ class ApiError extends Error {
 }
 
 function isAuthExpiredError(error) {
-  return error?.status === 401 || error?.status === 403
+  return error?.status === 401
 }
 
 async function apiRequest(path, { method = 'GET', token, body } = {}) {
@@ -92,6 +100,9 @@ async function apiRequest(path, { method = 'GET', token, body } = {}) {
       message = formatApiErrorDetail(data.detail) || message
     } catch {
       message = response.statusText || message
+    }
+    if (response.status === 403) {
+      message = 'You do not have permission to perform this action.'
     }
     throw new ApiError(message, response.status)
   }
@@ -160,6 +171,13 @@ function formatStudentExamError(message) {
   }
 
   return message || 'Unable to continue this exam right now.'
+}
+
+function formatDateTime(value) {
+  if (!value) return 'Not available'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return 'Not available'
+  return date.toLocaleString()
 }
 
 function getAttemptDeadline(submission, exam) {
@@ -597,6 +615,20 @@ function StudentDashboard({ token, user, onAuthExpired }) {
   const reviewCount = Object.values(review).filter(Boolean).length
   const totalQuestions = activeExam?.questions?.length ?? 0
   const canSubmit = activeExam && totalQuestions > 0
+  const submissionsByExamId = useMemo(() => {
+    const map = new Map()
+    submissions.forEach((submission) => {
+      map.set(submission.exam_id, submission)
+    })
+    return map
+  }, [submissions])
+  const examsById = useMemo(() => {
+    const map = new Map()
+    exams.forEach((exam) => {
+      map.set(exam.id, exam)
+    })
+    return map
+  }, [exams])
 
   const loadStudentData = useCallback(async () => {
     setStatus({ loading: true, error: '', success: '' })
@@ -720,12 +752,17 @@ function StudentDashboard({ token, user, onAuthExpired }) {
           })),
         },
       })
-      setResult(data)
+      setResult({ ...data, exam_title: activeExam.title })
       setActiveExam(null)
       setActiveSubmission(null)
       setAnswers({})
       setReview({})
       await loadStudentData()
+      setStatus({
+        loading: false,
+        error: '',
+        success: 'Your exam has been submitted successfully. Results will be published by the admin later.',
+      })
     } catch (err) {
       if (handleAuthenticatedError(err, onAuthExpired)) return
       setStatus({
@@ -781,19 +818,12 @@ function StudentDashboard({ token, user, onAuthExpired }) {
             {status.loading ? <LoadingBlock label="Loading exams" /> : null}
             <div className="exam-list">
               {exams.map((exam) => (
-                <article className="exam-card" key={exam.id}>
-                  <div>
-                    <h3>{exam.title}</h3>
-                    <p>{exam.description}</p>
-                  </div>
-                  <div className="exam-meta">
-                    <span>{exam.duration_minutes} min</span>
-                    <span>{exam.questions.length} questions</span>
-                  </div>
-                  <button className="primary-button" type="button" onClick={() => startExam(exam)}>
-                    Start exam
-                  </button>
-                </article>
+                <StudentExamCard
+                  exam={exam}
+                  key={exam.id}
+                  submission={submissionsByExamId.get(exam.id)}
+                  onStart={() => startExam(exam)}
+                />
               ))}
               {!status.loading && exams.length === 0 ? (
                 <p className="empty-state">No published exams are available right now.</p>
@@ -804,16 +834,32 @@ function StudentDashboard({ token, user, onAuthExpired }) {
           <aside className="side-column">
             <SectionTitle icon={CheckCircle2} eyebrow="Results" title="Recent submissions" />
             {result ? (
-              <div className="result-panel">
-                <strong>Latest score</strong>
-                <span>{result.score} marks</span>
+              <div className="submitted-panel">
+                <h3>Exam Submitted Successfully</h3>
+                <p>Your responses have been saved. Results will be published by the admin later.</p>
+                <div className="exam-meta">
+                  <span>{result.exam_title ?? `Exam #${result.exam_id}`}</span>
+                  <span>{result.status}</span>
+                  <span>{formatDateTime(result.submitted_at)}</span>
+                </div>
               </div>
             ) : null}
             <div className="submission-list">
               {submissions.map((submission) => (
                 <div className="submission-item" key={submission.id}>
-                  <span>Exam #{submission.exam_id}</span>
-                  <strong>{submission.score ?? 0} marks</strong>
+                  <div>
+                    <span>{examsById.get(submission.exam_id)?.title ?? `Exam #${submission.exam_id}`}</span>
+                    <p className="empty-state">
+                      {submission.is_result_published
+                        ? 'Results published'
+                        : 'You have already completed this exam. Results are not published yet.'}
+                    </p>
+                  </div>
+                  <strong>
+                    {submission.is_result_published && submission.score !== null
+                      ? `${submission.score} marks`
+                      : 'Results pending'}
+                  </strong>
                 </div>
               ))}
               {submissions.length === 0 ? (
@@ -824,6 +870,37 @@ function StudentDashboard({ token, user, onAuthExpired }) {
         </section>
       )}
     </main>
+  )
+}
+
+function StudentExamCard({ exam, submission, onStart }) {
+  const isCompleted = submission?.status === 'submitted'
+  const resultStatus = submission?.is_result_published ? 'Results published' : 'Results pending'
+
+  return (
+    <article className="exam-card">
+      <div>
+        <h3>{exam.title}</h3>
+        <p>{exam.description}</p>
+      </div>
+      <div className="exam-meta">
+        <span>{exam.duration_minutes} min</span>
+        <span>{exam.questions.length} questions</span>
+        {isCompleted ? <span>Completed</span> : null}
+        {isCompleted ? <span>{resultStatus}</span> : null}
+      </div>
+      {isCompleted ? (
+        <p className="empty-state">
+          {submission.is_result_published
+            ? 'Results published. Check your recent submissions for your score.'
+            : 'You have already completed this exam. Results are not published yet.'}
+        </p>
+      ) : (
+        <button className="primary-button" type="button" onClick={onStart}>
+          Start exam
+        </button>
+      )}
+    </article>
   )
 }
 
@@ -1108,15 +1185,77 @@ function AdminDashboard({ token, onAuthExpired }) {
   const [exams, setExams] = useState([])
   const [selectedExam, setSelectedExam] = useState(null)
   const [submissions, setSubmissions] = useState([])
+  const [users, setUsers] = useState([])
+  const [summary, setSummary] = useState(null)
+  const [activeTab, setActiveTab] = useState('exams')
   const [status, setStatus] = useState({ loading: true, error: '', success: '' })
   const [isCreatingExam, setIsCreatingExam] = useState(false)
+  const [userForm, setUserForm] = useState({
+    full_name: '',
+    email: '',
+    password: '',
+    role: 'student',
+    department: '',
+    class_name: '',
+    register_number: '',
+  })
+  const [userSearch, setUserSearch] = useState('')
+  const [roleFilter, setRoleFilter] = useState('all')
+  const [resetState, setResetState] = useState({ userId: null, password: '' })
+  const [deleteExamCandidate, setDeleteExamCandidate] = useState(null)
+
+  const dashboardSummary = useMemo(() => {
+    const submittedScores = submissions
+      .filter((submission) => submission.status === 'submitted' && submission.score !== null)
+      .map((submission) => Number(submission.score))
+    const localAverage =
+      submittedScores.length > 0
+        ? submittedScores.reduce((total, score) => total + score, 0) / submittedScores.length
+        : null
+
+    return {
+      total_exams: summary?.total_exams ?? exams.length,
+      published_exams: summary?.published_exams ?? exams.filter((exam) => exam.is_published && !exam.is_archived).length,
+      draft_exams: summary?.draft_exams ?? exams.filter((exam) => !exam.is_published && !exam.is_archived).length,
+      archived_exams: summary?.archived_exams ?? exams.filter((exam) => exam.is_archived).length,
+      total_students: summary?.total_students ?? users.filter((user) => user.role === 'student').length,
+      total_admins: summary?.total_admins ?? users.filter((user) => user.role === 'admin').length,
+      total_submissions: summary?.total_submissions ?? submissions.length,
+      average_score: summary?.average_score ?? localAverage,
+    }
+  }, [exams, submissions, summary, users])
+
+  const filteredUsers = useMemo(() => {
+    const search = userSearch.trim().toLowerCase()
+    return users.filter((user) => {
+      const matchesRole = roleFilter === 'all' || user.role === roleFilter
+      const searchable = [
+        user.full_name,
+        user.email,
+        user.register_number,
+        user.department,
+        user.class_name,
+        user.batch,
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase()
+      return matchesRole && (!search || searchable.includes(search))
+    })
+  }, [roleFilter, userSearch, users])
 
   const loadAdminData = useCallback(
     async (examId = null) => {
       setStatus((current) => ({ ...current, loading: true, error: '' }))
       try {
-        const examData = await apiRequest('/exams', { token })
+        const [examData, userData, summaryData] = await Promise.all([
+          apiRequest('/exams', { token }),
+          apiRequest('/auth/users', { token }),
+          apiRequest('/admin/summary', { token }),
+        ])
         setExams(examData)
+        setUsers(userData)
+        setSummary(summaryData)
         const nextExamId = examId ?? examData[0]?.id
         if (nextExamId) {
           const [detailedExam, submissionData] = await Promise.all([
@@ -1125,6 +1264,9 @@ function AdminDashboard({ token, onAuthExpired }) {
           ])
           setSelectedExam(detailedExam)
           setSubmissions(submissionData)
+        } else {
+          setSelectedExam(null)
+          setSubmissions([])
         }
       } catch (err) {
         if (handleAuthenticatedError(err, onAuthExpired)) return
@@ -1143,6 +1285,12 @@ function AdminDashboard({ token, onAuthExpired }) {
 
   async function selectExam(examId) {
     await loadAdminData(examId)
+  }
+
+  function showError(err) {
+    if (handleAuthenticatedError(err, onAuthExpired)) return true
+    setStatus({ loading: false, error: err.message, success: '' })
+    return true
   }
 
   async function persistBuilderDraft(draft, publishAfterSave = false) {
@@ -1237,8 +1385,7 @@ function AdminDashboard({ token, onAuthExpired }) {
       })
       await loadAdminData(examId)
     } catch (err) {
-      if (handleAuthenticatedError(err, onAuthExpired)) return
-      setStatus({ loading: false, error: err.message, success: '' })
+      showError(err)
     }
   }
 
@@ -1259,8 +1406,7 @@ function AdminDashboard({ token, onAuthExpired }) {
       setStatus({ loading: false, error: '', success: 'Draft exam created.' })
       await loadAdminData(createdExam.id)
     } catch (err) {
-      if (handleAuthenticatedError(err, onAuthExpired)) return
-      setStatus({ loading: false, error: err.message, success: '' })
+      showError(err)
     } finally {
       setIsCreatingExam(false)
     }
@@ -1277,8 +1423,7 @@ function AdminDashboard({ token, onAuthExpired }) {
       setStatus({ loading: false, error: '', success: 'Question deleted.' })
       await loadAdminData(selectedExam.id)
     } catch (err) {
-      if (handleAuthenticatedError(err, onAuthExpired)) return
-      setStatus({ loading: false, error: err.message, success: '' })
+      showError(err)
     }
   }
 
@@ -1292,8 +1437,141 @@ function AdminDashboard({ token, onAuthExpired }) {
       })
       await loadAdminData(exam.id)
     } catch (err) {
-      if (handleAuthenticatedError(err, onAuthExpired)) return
-      setStatus({ loading: false, error: err.message, success: '' })
+      showError(err)
+    }
+  }
+
+  async function toggleResultsPublished(exam) {
+    setStatus({ loading: true, error: '', success: '' })
+    try {
+      await apiRequest(`/exams/${exam.id}/results-publish`, {
+        method: 'PATCH',
+        token,
+        body: { is_result_published: !exam.is_result_published },
+      })
+      setStatus({
+        loading: false,
+        error: '',
+        success: exam.is_result_published ? 'Results unpublished.' : 'Results published.',
+      })
+      await loadAdminData(exam.id)
+    } catch (err) {
+      showError(err)
+    }
+  }
+
+  async function toggleArchived(exam) {
+    setStatus({ loading: true, error: '', success: '' })
+    try {
+      await apiRequest(`/exams/${exam.id}/archive`, {
+        method: 'PATCH',
+        token,
+        body: { is_archived: !exam.is_archived },
+      })
+      setStatus({
+        loading: false,
+        error: '',
+        success: exam.is_archived ? 'Exam restored.' : 'Exam archived.',
+      })
+      await loadAdminData(exam.id)
+    } catch (err) {
+      showError(err)
+    }
+  }
+
+  async function confirmDeleteExam() {
+    if (!deleteExamCandidate) return
+    setStatus({ loading: true, error: '', success: '' })
+    try {
+      await apiRequest(`/exams/${deleteExamCandidate.id}`, {
+        method: 'DELETE',
+        token,
+      })
+      const remainingExams = exams.filter((exam) => exam.id !== deleteExamCandidate.id)
+      const nextExamId = remainingExams[0]?.id ?? null
+      setDeleteExamCandidate(null)
+      setStatus({ loading: false, error: '', success: 'Exam deleted.' })
+      await loadAdminData(nextExamId)
+    } catch (err) {
+      setDeleteExamCandidate(null)
+      showError(err)
+    }
+  }
+
+  async function handleCreateUser(event) {
+    event.preventDefault()
+    if (userForm.role === 'student' && !userForm.register_number.trim()) {
+      setStatus({ loading: false, error: 'Register number is required for student users.', success: '' })
+      return
+    }
+
+    setStatus({ loading: true, error: '', success: '' })
+    try {
+      await apiRequest('/auth/users', {
+        method: 'POST',
+        token,
+        body: {
+          email: userForm.email.trim().toLowerCase(),
+          full_name: userForm.full_name.trim(),
+          password: userForm.password,
+          role: userForm.role,
+          register_number: userForm.register_number.trim(),
+          department: userForm.department.trim(),
+          batch: '',
+          class_name: userForm.class_name.trim(),
+          is_active: true,
+          is_superuser: false,
+        },
+      })
+      setUserForm({
+        full_name: '',
+        email: '',
+        password: '',
+        role: 'student',
+        department: '',
+        class_name: '',
+        register_number: '',
+      })
+      setStatus({ loading: false, error: '', success: 'User created.' })
+      await loadAdminData(selectedExam?.id ?? null)
+    } catch (err) {
+      showError(err)
+    }
+  }
+
+  async function toggleUserActive(user) {
+    setStatus({ loading: true, error: '', success: '' })
+    try {
+      await apiRequest(`/auth/users/${user.id}`, {
+        method: 'PATCH',
+        token,
+        body: { is_active: !user.is_active },
+      })
+      setStatus({
+        loading: false,
+        error: '',
+        success: user.is_active ? 'User deactivated.' : 'User reactivated.',
+      })
+      await loadAdminData(selectedExam?.id ?? null)
+    } catch (err) {
+      showError(err)
+    }
+  }
+
+  async function resetPassword(event) {
+    event.preventDefault()
+    if (!resetState.userId || !resetState.password) return
+    setStatus({ loading: true, error: '', success: '' })
+    try {
+      await apiRequest(`/auth/users/${resetState.userId}/reset-password`, {
+        method: 'POST',
+        token,
+        body: { new_password: resetState.password },
+      })
+      setResetState({ userId: null, password: '' })
+      setStatus({ loading: false, error: '', success: 'Password reset successfully.' })
+    } catch (err) {
+      showError(err)
     }
   }
 
@@ -1306,71 +1584,297 @@ function AdminDashboard({ token, onAuthExpired }) {
           <p>Create, import, review submissions, and investigate suspicious activity.</p>
         </div>
         <div className="metric-row">
-          <Metric label="Exams" value={exams.length} />
-          <Metric label="Published" value={exams.filter((exam) => exam.is_published).length} />
-          <Metric label="Flags" value={submissions.reduce((total, item) => total + item.cheat_event_count, 0)} />
+          <Metric label="Exams" value={dashboardSummary.total_exams} />
+          <Metric label="Published" value={dashboardSummary.published_exams} />
+          <Metric label="Drafts" value={dashboardSummary.draft_exams} />
+          <Metric label="Students" value={dashboardSummary.total_students} />
+          <Metric label="Admins" value={dashboardSummary.total_admins} />
+          <Metric label="Submissions" value={dashboardSummary.total_submissions} />
+          <Metric
+            label="Average score"
+            value={dashboardSummary.average_score === null ? '-' : dashboardSummary.average_score.toFixed(1)}
+          />
         </div>
       </section>
 
       {status.error ? <p className="notice error">{status.error}</p> : null}
       {status.success ? <p className="notice success">{status.success}</p> : null}
 
-      <section className="content-grid admin-grid">
-        <div className="main-column">
-          <div className="section-title-row">
-            <SectionTitle icon={ClipboardList} eyebrow="Catalog" title="All exams" />
-            <button
-              className="primary-button"
-              type="button"
-              onClick={createNewExam}
-              disabled={isCreatingExam || status.loading}
-            >
-              {isCreatingExam ? (
-                <Loader2 className="spin" size={18} aria-hidden="true" />
-              ) : (
-                <PlusCircle size={18} aria-hidden="true" />
-              )}
-              Add New Exam
-            </button>
-          </div>
-          {status.loading && exams.length === 0 ? <LoadingBlock label="Loading exams" /> : null}
-          <div className="exam-list">
-            {exams.map((exam) => (
-              <article
-                className={`exam-card selectable ${selectedExam?.id === exam.id ? 'selected' : ''}`}
-                key={exam.id}
-              >
-                <button className="blank-button" type="button" onClick={() => selectExam(exam.id)}>
-                  <h3>{exam.title}</h3>
-                  <p>{exam.description}</p>
-                </button>
-                <div className="exam-meta">
-                  <span>{exam.duration_minutes} min</span>
-                  <span>{exam.questions.length} questions</span>
-                  <span>{exam.is_published ? 'Published' : 'Draft'}</span>
-                </div>
-                <button className="secondary-button" type="button" onClick={() => togglePublished(exam)}>
-                  {exam.is_published ? 'Unpublish' : 'Publish'}
-                </button>
-              </article>
-            ))}
-          </div>
-        </div>
+      <div className="segmented-control admin-tabs" aria-label="Admin dashboard sections">
+        <button className={activeTab === 'exams' ? 'active' : ''} type="button" onClick={() => setActiveTab('exams')}>
+          <ClipboardList size={16} aria-hidden="true" />
+          Exams
+        </button>
+        <button className={activeTab === 'users' ? 'active' : ''} type="button" onClick={() => setActiveTab('users')}>
+          <Users size={16} aria-hidden="true" />
+          Users
+        </button>
+        <button className={activeTab === 'results' ? 'active' : ''} type="button" onClick={() => setActiveTab('results')}>
+          <Flag size={16} aria-hidden="true" />
+          Results
+        </button>
+      </div>
 
-        <aside className="side-column forms-column">
-          <ExamBuilder
-            selectedExam={selectedExam}
-            isSaving={status.loading}
-            onSaveDraft={(draft) => persistBuilderDraft(draft, false)}
-            onPublish={(draft) => persistBuilderDraft(draft, true)}
-            onDeleteQuestion={deleteBuilderQuestion}
-          />
-        </aside>
-      </section>
-
-      {selectedExam ? (
+      {activeTab === 'exams' ? (
         <>
-          <AdminExamDetails exam={selectedExam} />
+          <section className="content-grid admin-grid">
+            <div className="main-column">
+              <div className="section-title-row">
+                <SectionTitle icon={ClipboardList} eyebrow="Catalog" title="All exams" />
+                <button
+                  className="primary-button"
+                  type="button"
+                  onClick={createNewExam}
+                  disabled={isCreatingExam || status.loading}
+                >
+                  {isCreatingExam ? (
+                    <Loader2 className="spin" size={18} aria-hidden="true" />
+                  ) : (
+                    <PlusCircle size={18} aria-hidden="true" />
+                  )}
+                  Add New Exam
+                </button>
+              </div>
+              {status.loading && exams.length === 0 ? <LoadingBlock label="Loading exams" /> : null}
+              <div className="exam-list">
+                {exams.map((exam) => (
+                  <article
+                    className={`exam-card selectable ${selectedExam?.id === exam.id ? 'selected' : ''}`}
+                    key={exam.id}
+                  >
+                    <button className="blank-button" type="button" onClick={() => selectExam(exam.id)}>
+                      <h3>{exam.title}</h3>
+                      <p>{exam.description}</p>
+                    </button>
+                    <div className="exam-meta">
+                      <span>{exam.duration_minutes} min</span>
+                      <span>{exam.questions.length} questions</span>
+                      <span>{exam.is_archived ? 'Archived' : exam.is_published ? 'Published' : 'Draft'}</span>
+                      <span>{exam.is_result_published ? 'Results Published' : 'Results Not Published'}</span>
+                    </div>
+                    <div className="card-actions">
+                      <button className="secondary-button" type="button" onClick={() => selectExam(exam.id)}>
+                        <Edit size={16} aria-hidden="true" />
+                        Edit
+                      </button>
+                      <button
+                        className="secondary-button"
+                        type="button"
+                        onClick={() => togglePublished(exam)}
+                        disabled={exam.is_archived || status.loading}
+                      >
+                        {exam.is_published ? 'Unpublish' : 'Publish'}
+                      </button>
+                      <button className="secondary-button" type="button" onClick={() => toggleArchived(exam)}>
+                        <Archive size={16} aria-hidden="true" />
+                        {exam.is_archived ? 'Unarchive' : 'Archive'}
+                      </button>
+                      <button
+                        className="secondary-button"
+                        type="button"
+                        onClick={() => toggleResultsPublished(exam)}
+                        disabled={status.loading}
+                      >
+                        <CheckCircle2 size={16} aria-hidden="true" />
+                        {exam.is_result_published ? 'Unpublish Results' : 'Publish Results'}
+                      </button>
+                      <button
+                        className="secondary-button"
+                        type="button"
+                        onClick={() => {
+                          setActiveTab('results')
+                          void selectExam(exam.id)
+                        }}
+                      >
+                        <Eye size={16} aria-hidden="true" />
+                        View Submissions
+                      </button>
+                      <button
+                        className="secondary-button danger-button"
+                        type="button"
+                        onClick={() => setDeleteExamCandidate(exam)}
+                      >
+                        <Trash2 size={16} aria-hidden="true" />
+                        Delete
+                      </button>
+                    </div>
+                  </article>
+                ))}
+                {exams.length === 0 && !status.loading ? <p className="empty-state">No exams exist yet.</p> : null}
+              </div>
+            </div>
+
+            <aside className="side-column forms-column">
+              <ExamBuilder
+                selectedExam={selectedExam}
+                isSaving={status.loading}
+                onSaveDraft={(draft) => persistBuilderDraft(draft, false)}
+                onPublish={(draft) => persistBuilderDraft(draft, true)}
+                onDeleteQuestion={deleteBuilderQuestion}
+              />
+            </aside>
+          </section>
+
+          {selectedExam ? <AdminExamDetails exam={selectedExam} /> : null}
+        </>
+      ) : null}
+
+      {activeTab === 'users' ? (
+        <section className="content-grid user-management-grid">
+          <div className="main-column">
+            <div className="section-title-row">
+              <SectionTitle icon={Users} eyebrow="Directory" title="Users" />
+              <div className="user-tools">
+                <label className="search-box">
+                  <Search size={16} aria-hidden="true" />
+                  <input
+                    type="search"
+                    placeholder="Search users"
+                    value={userSearch}
+                    onChange={(event) => setUserSearch(event.target.value)}
+                  />
+                </label>
+                <select value={roleFilter} onChange={(event) => setRoleFilter(event.target.value)}>
+                  <option value="all">All roles</option>
+                  <option value="admin">Admins</option>
+                  <option value="student">Students</option>
+                </select>
+              </div>
+            </div>
+            <div className="user-list">
+              {filteredUsers.map((user) => (
+                <article className="user-card" key={user.id}>
+                  <div>
+                    <div className="panel-title-row">
+                      <h3>{user.full_name}</h3>
+                      <div className="exam-meta">
+                        <span>{user.role}</span>
+                        <span>{user.is_active ? 'Active' : 'Inactive'}</span>
+                        {user.is_superuser ? <span>Superuser</span> : null}
+                      </div>
+                    </div>
+                    <p className="empty-state">{user.email}</p>
+                    <p className="empty-state">
+                      {[user.register_number, user.department, user.class_name || user.batch].filter(Boolean).join(' - ') || 'No academic metadata'}
+                    </p>
+                  </div>
+                  <div className="card-actions">
+                    <button className="secondary-button" type="button" onClick={() => toggleUserActive(user)}>
+                      {user.is_active ? <UserX size={16} aria-hidden="true" /> : <UserCheck size={16} aria-hidden="true" />}
+                      {user.is_active ? 'Deactivate' : 'Reactivate'}
+                    </button>
+                    <button
+                      className="secondary-button"
+                      type="button"
+                      onClick={() => setResetState({ userId: user.id, password: '' })}
+                    >
+                      <KeyRound size={16} aria-hidden="true" />
+                      Reset Password
+                    </button>
+                  </div>
+                  {resetState.userId === user.id ? (
+                    <form className="inline-reset-form" onSubmit={resetPassword}>
+                      <label>
+                        New password
+                        <input
+                          type="password"
+                          value={resetState.password}
+                          onChange={(event) =>
+                            setResetState((current) => ({ ...current, password: event.target.value }))
+                          }
+                          minLength={8}
+                          required
+                        />
+                      </label>
+                      <button className="primary-button" type="submit">Save</button>
+                      <button
+                        className="secondary-button"
+                        type="button"
+                        onClick={() => setResetState({ userId: null, password: '' })}
+                      >
+                        Cancel
+                      </button>
+                    </form>
+                  ) : null}
+                </article>
+              ))}
+              {filteredUsers.length === 0 ? <p className="empty-state">No users match the current filters.</p> : null}
+            </div>
+          </div>
+
+          <aside className="side-column">
+            <form className="tool-panel form-grid" onSubmit={handleCreateUser}>
+              <SectionTitle icon={UserPlus} eyebrow="Create" title="New user" />
+              <label>
+                Full Name
+                <input
+                  value={userForm.full_name}
+                  onChange={(event) => setUserForm((current) => ({ ...current, full_name: event.target.value }))}
+                  required
+                />
+              </label>
+              <label>
+                Email
+                <input
+                  type="email"
+                  value={userForm.email}
+                  onChange={(event) => setUserForm((current) => ({ ...current, email: event.target.value }))}
+                  required
+                />
+              </label>
+              <label>
+                Password
+                <input
+                  type="password"
+                  value={userForm.password}
+                  onChange={(event) => setUserForm((current) => ({ ...current, password: event.target.value }))}
+                  minLength={8}
+                  required
+                />
+              </label>
+              <label>
+                Role
+                <select
+                  value={userForm.role}
+                  onChange={(event) => setUserForm((current) => ({ ...current, role: event.target.value }))}
+                >
+                  <option value="student">Student</option>
+                  <option value="admin">Admin</option>
+                </select>
+              </label>
+              <label>
+                Department
+                <input
+                  value={userForm.department}
+                  onChange={(event) => setUserForm((current) => ({ ...current, department: event.target.value }))}
+                />
+              </label>
+              <label>
+                Section
+                <input
+                  value={userForm.class_name}
+                  onChange={(event) => setUserForm((current) => ({ ...current, class_name: event.target.value }))}
+                />
+              </label>
+              <label>
+                Register Number
+                <input
+                  value={userForm.register_number}
+                  onChange={(event) => setUserForm((current) => ({ ...current, register_number: event.target.value }))}
+                  required={userForm.role === 'student'}
+                />
+              </label>
+              <button className="primary-button" type="submit" disabled={status.loading}>
+                <UserPlus size={16} aria-hidden="true" />
+                Create User
+              </button>
+            </form>
+          </aside>
+        </section>
+      ) : null}
+
+      {activeTab === 'results' && selectedExam ? (
+        <>
           <ExportResultsPanel
             exams={exams}
             selectedExam={selectedExam}
@@ -1380,6 +1884,39 @@ function AdminDashboard({ token, onAuthExpired }) {
           <SubmissionReviewPanel submissions={submissions} />
         </>
       ) : null}
+
+      {activeTab === 'results' && !selectedExam ? (
+        <section className="details-band">
+          <p className="empty-state">Select an exam to view submissions.</p>
+        </section>
+      ) : null}
+
+      {deleteExamCandidate ? (
+        <div className="modal-backdrop" role="presentation">
+          <div className="modal-panel" role="dialog" aria-modal="true" aria-labelledby="delete-exam-title">
+            <button
+              className="icon-button modal-close"
+              type="button"
+              onClick={() => setDeleteExamCandidate(null)}
+              aria-label="Close delete exam confirmation"
+            >
+              <X size={18} aria-hidden="true" />
+            </button>
+            <SectionTitle icon={Trash2} eyebrow="Confirm delete" title="Delete exam" />
+            <p id="delete-exam-title" className="empty-state">
+              Are you sure you want to delete this exam? This action cannot be undone.
+            </p>
+            <div className="modal-actions">
+              <button className="secondary-button" type="button" onClick={() => setDeleteExamCandidate(null)}>
+                Cancel
+              </button>
+              <button className="primary-button danger-fill-button" type="button" onClick={confirmDeleteExam}>
+                Delete Exam
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </main>
   )
 }
@@ -1388,6 +1925,10 @@ function AdminExamDetails({ exam }) {
   return (
     <section className="details-band">
       <SectionTitle icon={BookOpenCheck} eyebrow="Selected exam" title={exam.title} />
+      <div className="exam-meta details-status-row">
+        <span>{exam.is_archived ? 'Archived' : exam.is_published ? 'Published' : 'Draft'}</span>
+        <span>{exam.is_result_published ? 'Results Published' : 'Results Not Published'}</span>
+      </div>
       <div className="question-stack compact-stack">
         {exam.questions.map((question, index) => (
           <article className="question-panel" key={question.id}>
