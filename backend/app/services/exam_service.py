@@ -804,7 +804,7 @@ def start_exam(db: Session, exam_id: int, student: User) -> Submission:
             db=db,
             submission=existing_submission,
             exam=exam,
-            reason="Exam auto-submitted because student attempted to reopen an active exam.",
+            reason="reopen_attempt",
         )
         raise ValueError("This exam attempt was already started and cannot be reopened.")
 
@@ -827,7 +827,7 @@ def start_exam(db: Session, exam_id: int, student: User) -> Submission:
                 db=db,
                 submission=existing_submission,
                 exam=exam,
-                reason="Exam auto-submitted because student attempted to reopen an active exam.",
+                reason="reopen_attempt",
             )
             raise ValueError("This exam attempt was already started and cannot be reopened.")
         raise ValueError("You have already started or submitted this exam.")
@@ -909,7 +909,7 @@ def force_submit_exam(
             db=db,
             submission=active_submission,
             exam=exam,
-            reason=f"Exam auto-submitted because student left the exam screen. Reason: {submission_in.reason}.",
+            reason=submission_in.reason,
             answers=submission_in.answers,
         )
 

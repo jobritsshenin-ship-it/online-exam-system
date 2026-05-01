@@ -1044,7 +1044,8 @@ select:focus {
 }
 
 .exam-start-warning,
-.exam-security-warning {
+.exam-security-warning,
+.exam-fullscreen-warning {
   border: 1px solid rgba(180, 35, 24, 0.24);
   border-radius: 8px;
   color: #7a271a;
@@ -1061,6 +1062,12 @@ select:focus {
 .exam-security-warning {
   max-width: 720px;
   padding: 9px 11px;
+}
+
+.exam-fullscreen-warning {
+  max-width: 720px;
+  padding: 9px 11px;
+  background: #fff8eb;
 }
 
 .exam-attempt-topbar > div:first-child,

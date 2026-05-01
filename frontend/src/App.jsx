@@ -640,6 +640,7 @@ function StudentDashboard({ token, user, onAuthExpired, onLogoutGuardChange }) {
   const [status, setStatus] = useState({ loading: true, error: '', success: '' })
   const activeExamRef = useRef(activeExam)
   const answersRef = useRef(answers)
+  const hasAutoSubmittedRef = useRef(false)
   const autoSubmitInProgressRef = useRef(false)
 
   const selectedCount = Object.values(answers).filter(Boolean).length
@@ -692,26 +693,29 @@ function StudentDashboard({ token, user, onAuthExpired, onLogoutGuardChange }) {
   }, [loadStudentData])
 
   const reportEvent = useCallback(
-    async (eventType, details) => {
-      if (!activeExam) return
+    async (eventType, details, { keepalive = false } = {}) => {
+      const exam = activeExamRef.current
+      if (!exam) return
       try {
-        await apiRequest(`/exams/${activeExam.id}/proctoring-events`, {
+        await apiRequest(`/exams/${exam.id}/proctoring-events`, {
           method: 'POST',
           token,
-          body: { event_type: eventType, details },
+          keepalive,
+          body: { event_type: eventType, details, severity: 'critical' },
         })
       } catch (err) {
         if (handleAuthenticatedError(err, onAuthExpired)) return
         // Proctor events should not interrupt the exam-taking flow.
       }
     },
-    [activeExam, onAuthExpired, token],
+    [onAuthExpired, token],
   )
 
   const autoSubmitActiveExam = useCallback(
-    async (reason = 'page_leave', { keepalive = false, updateUi = true } = {}) => {
+    async (reason = 'manual_security_lock', { keepalive = false, updateUi = true } = {}) => {
       const exam = activeExamRef.current
-      if (!exam || autoSubmitInProgressRef.current) return null
+      if (!exam || hasAutoSubmittedRef.current || autoSubmitInProgressRef.current) return null
+      hasAutoSubmittedRef.current = true
       autoSubmitInProgressRef.current = true
 
       const requestBody = {
@@ -746,6 +750,7 @@ function StudentDashboard({ token, user, onAuthExpired, onLogoutGuardChange }) {
 
         return data
       } catch (err) {
+        hasAutoSubmittedRef.current = false
         autoSubmitInProgressRef.current = false
         if (updateUi) {
           if (handleAuthenticatedError(err, onAuthExpired)) return null
@@ -758,7 +763,7 @@ function StudentDashboard({ token, user, onAuthExpired, onLogoutGuardChange }) {
   )
 
   useEffect(() => {
-    onLogoutGuardChange(activeExam ? () => autoSubmitActiveExam('logout') : null)
+    onLogoutGuardChange(activeExam ? () => autoSubmitActiveExam('logout_during_exam') : null)
     return () => onLogoutGuardChange(null)
   }, [activeExam, autoSubmitActiveExam, onLogoutGuardChange])
 
@@ -767,6 +772,7 @@ function StudentDashboard({ token, user, onAuthExpired, onLogoutGuardChange }) {
     try {
       const submission = await apiRequest(`/exams/${exam.id}/start`, { method: 'POST', token })
       const mapped = mapSubmissionAnswers(submission)
+      hasAutoSubmittedRef.current = false
       autoSubmitInProgressRef.current = false
       setActiveExam(exam)
       setActiveSubmission(submission)
@@ -826,7 +832,7 @@ function StudentDashboard({ token, user, onAuthExpired, onLogoutGuardChange }) {
     if (!canSubmit) return
 
     if (auto) {
-      await autoSubmitActiveExam('time_expired')
+      await autoSubmitActiveExam('manual_security_lock')
       return
     }
 
@@ -852,6 +858,7 @@ function StudentDashboard({ token, user, onAuthExpired, onLogoutGuardChange }) {
           })),
         },
       })
+      hasAutoSubmittedRef.current = true
       autoSubmitInProgressRef.current = true
       setResult({ ...data, exam_title: activeExam.title })
       setActiveExam(null)
@@ -910,7 +917,7 @@ function StudentDashboard({ token, user, onAuthExpired, onLogoutGuardChange }) {
           onToggleReview={toggleReview}
           onSubmit={submitExam}
           onAutoSubmit={autoSubmitActiveExam}
-          onCancel={() => autoSubmitActiveExam('screen_leave')}
+          onCancel={() => autoSubmitActiveExam('route_leave')}
           onProctorEvent={reportEvent}
         />
       ) : (
@@ -1000,7 +1007,7 @@ function StudentExamCard({ exam, submission, onStart }) {
       ) : (
         <>
           <p className="exam-start-warning">
-            Do not refresh, close, switch tabs, or leave the exam screen. Doing so will submit your exam automatically.
+            Do not exit fullscreen, switch tabs, minimize, refresh, or leave the exam screen. Doing so will automatically submit your exam.
           </p>
           <button className="primary-button" type="button" onClick={onStart}>
             Start exam
@@ -1031,6 +1038,7 @@ function ExamAttempt({
 }) {
   const questions = useMemo(() => exam.questions ?? [], [exam.questions])
   const [currentIndex, setCurrentIndex] = useState(0)
+  const [fullscreenWarning, setFullscreenWarning] = useState('')
   const [visited, setVisited] = useState(() =>
     questions[0] ? { [questions[0].id]: true } : {},
   )
@@ -1079,29 +1087,64 @@ function ExamAttempt({
   useEffect(() => {
     if (!deadline || remainingSeconds > 0 || autoSubmitRef.current) return
     autoSubmitRef.current = true
-    void onAutoSubmit('time_expired')
+    void onAutoSubmit('manual_security_lock')
   }, [deadline, onAutoSubmit, remainingSeconds])
 
   useEffect(() => {
+    let requestedFullscreen = false
+    const rootElement = document.documentElement
+
+    async function enterFullscreen() {
+      if (!rootElement.requestFullscreen || document.fullscreenElement) return
+      requestedFullscreen = true
+      try {
+        await rootElement.requestFullscreen()
+        setFullscreenWarning('')
+      } catch {
+        setFullscreenWarning('Fullscreen permission was denied. Do not leave the exam screen.')
+      } finally {
+        window.setTimeout(() => {
+          requestedFullscreen = false
+        }, 500)
+      }
+    }
+
+    void enterFullscreen()
+
+    function handleFullscreenChange() {
+      if (requestedFullscreen || document.fullscreenElement || autoSubmitRef.current) return
+      autoSubmitRef.current = true
+      void onProctorEvent('fullscreen_exit', 'Student exited fullscreen during the exam.')
+      void onAutoSubmit('fullscreen_exit')
+    }
+
     function logVisibility() {
-      if (document.visibilityState === 'hidden') {
-        void onProctorEvent('tab_hidden', 'Student switched away from the exam tab.')
+      if (document.visibilityState === 'hidden' && !autoSubmitRef.current) {
+        autoSubmitRef.current = true
+        void onProctorEvent('tab_hidden', 'Student switched away from the exam tab.', { keepalive: true })
         void onAutoSubmit('tab_hidden', { keepalive: true })
       }
     }
     function logBlur() {
+      if (requestedFullscreen || autoSubmitRef.current) return
+      autoSubmitRef.current = true
       void onProctorEvent('window_blur', 'Browser window lost focus during the exam.')
+      void onAutoSubmit('window_blur')
     }
     function logClipboard(event) {
       void onProctorEvent(event.type, `Clipboard event detected: ${event.type}.`)
     }
     function handlePageLeave() {
-      void onAutoSubmit('page_leave', { keepalive: true, updateUi: false })
+      if (autoSubmitRef.current) return
+      autoSubmitRef.current = true
+      void onProctorEvent('page_unload', 'Student left or refreshed the exam page.', { keepalive: true })
+      void onAutoSubmit('page_unload', { keepalive: true, updateUi: false })
     }
     function handleBeforeUnload() {
       handlePageLeave()
     }
 
+    document.addEventListener('fullscreenchange', handleFullscreenChange)
     document.addEventListener('visibilitychange', logVisibility)
     window.addEventListener('blur', logBlur)
     window.addEventListener('pagehide', handlePageLeave)
@@ -1111,6 +1154,7 @@ function ExamAttempt({
     document.addEventListener('contextmenu', logClipboard)
 
     return () => {
+      document.removeEventListener('fullscreenchange', handleFullscreenChange)
       document.removeEventListener('visibilitychange', logVisibility)
       window.removeEventListener('blur', logBlur)
       window.removeEventListener('pagehide', handlePageLeave)
@@ -1183,8 +1227,9 @@ function ExamAttempt({
             <h2>{exam.title}</h2>
             <p>{user.full_name} - {user.email}</p>
             <p className="exam-security-warning">
-              Do not refresh, close, switch tabs, or leave the exam screen. Doing so will submit your exam automatically.
+              Do not exit fullscreen, switch tabs, minimize, refresh, or leave the exam screen. Doing so will automatically submit your exam.
             </p>
+            {fullscreenWarning ? <p className="exam-fullscreen-warning">{fullscreenWarning}</p> : null}
           </div>
           <div className="attempt-topbar-actions">
             <span className={`timer-pill ${isUrgent ? 'urgent' : ''}`}>

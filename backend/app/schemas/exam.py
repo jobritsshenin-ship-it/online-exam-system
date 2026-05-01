@@ -166,7 +166,16 @@ class SubmissionCreate(BaseModel):
 
 
 class AutoSubmitRequest(SubmissionCreate):
-    reason: str = Field(default="page_leave", min_length=1, max_length=120)
+    reason: Literal[
+        "tab_hidden",
+        "window_blur",
+        "fullscreen_exit",
+        "page_unload",
+        "route_leave",
+        "logout_during_exam",
+        "manual_security_lock",
+        "reopen_attempt",
+    ] = "manual_security_lock"
 
     @field_validator("reason")
     @classmethod
