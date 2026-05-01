@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Literal
 from typing import List
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.utils.enums import QuestionType, SubmissionStatus
 
@@ -50,6 +50,14 @@ class QuestionOptionCreate(BaseModel):
     is_correct: bool = False
     sort_order: int = 0
 
+    @field_validator("text")
+    @classmethod
+    def strip_option_text(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("Option text cannot be blank.")
+        return stripped
+
 
 class QuestionOptionRead(BaseModel):
     id: int
@@ -71,9 +79,50 @@ class QuestionCreate(BaseModel):
     sort_order: int = 0
     options: List[QuestionOptionCreate] = Field(default_factory=list)
 
+    @field_validator("prompt")
+    @classmethod
+    def strip_prompt(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("Question prompt cannot be blank.")
+        return stripped
+
+    @field_validator("explanation")
+    @classmethod
+    def strip_explanation(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        stripped = value.strip()
+        return stripped or None
+
+    @model_validator(mode="after")
+    def validate_mcq_options(self):
+        if self.question_type != QuestionType.MCQ:
+            raise ValueError("Only multiple-choice questions are supported right now.")
+        if len(self.options) < 2:
+            raise ValueError("A multiple-choice question needs at least two non-empty options.")
+        correct_count = sum(1 for option in self.options if option.is_correct)
+        if correct_count != 1:
+            raise ValueError("A multiple-choice question needs exactly one correct option.")
+        return self
+
 
 class QuestionBulkCreate(BaseModel):
     questions: List[QuestionCreate] = Field(min_length=1)
+
+
+class QuestionImportBlockResult(BaseModel):
+    block_number: int
+    question: str | None = None
+    valid: bool
+    errors: List[str] = Field(default_factory=list)
+
+
+class QuestionImportResult(BaseModel):
+    valid_count: int
+    invalid_count: int
+    created_count: int
+    blocks: List[QuestionImportBlockResult] = Field(default_factory=list)
 
 
 class QuestionRead(BaseModel):
@@ -114,6 +163,18 @@ class SubmissionAnswerCreate(BaseModel):
 
 class SubmissionCreate(BaseModel):
     answers: List[SubmissionAnswerCreate] = Field(default_factory=list)
+
+
+class AutoSubmitRequest(SubmissionCreate):
+    reason: str = Field(default="page_leave", min_length=1, max_length=120)
+
+    @field_validator("reason")
+    @classmethod
+    def strip_reason(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("Auto-submit reason is required.")
+        return stripped
 
 
 class SavedAnswerRequest(BaseModel):

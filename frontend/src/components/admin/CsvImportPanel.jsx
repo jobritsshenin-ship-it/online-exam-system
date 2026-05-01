@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { FileUp } from 'lucide-react'
+import { Download, FileUp } from 'lucide-react'
 import { parseQuestionCsv, questionCsvHeaders } from '../../utils/csv'
 
 export function CsvImportPanel({ disabled, onImport }) {
@@ -48,6 +48,13 @@ export function CsvImportPanel({ disabled, onImport }) {
         </div>
       </div>
 
+      <div className="template-actions">
+        <a className="secondary-button" href="/templates/question_import_template.csv" download>
+          <Download size={16} aria-hidden="true" />
+          Download CSV Template
+        </a>
+      </div>
+
       <div
         className={`csv-dropzone ${isDragging ? 'dragging' : ''}`}
         onDragOver={(event) => {
@@ -72,7 +79,18 @@ export function CsvImportPanel({ disabled, onImport }) {
         Format: <code>{expectedFormat}</code>
       </p>
       <p className="csv-format">
-        Use the exact option text in <code>correct_answer</code>. Example:{' '}
+        <strong>Required columns:</strong> question, option1, option2, option3, option4,
+        correct_answer, marks, explanation.
+      </p>
+      <ul className="import-rules">
+        <li>question is required.</li>
+        <li>at least 2 options are required.</li>
+        <li>correct_answer may be exact option text, A/B/C/D, option1-option4, or 1/2/3/4.</li>
+        <li>marks defaults to 1 if empty.</li>
+        <li>explanation is optional.</li>
+      </ul>
+      <p className="csv-format">
+        Example:{' '}
         <code>"What protocol assigns IP addresses?","DNS","FTP","DHCP","ARP","DHCP",1,"DHCP assigns addresses."</code>
       </p>
 

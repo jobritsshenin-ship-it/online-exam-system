@@ -1,6 +1,10 @@
 import json
+import re
+from io import BytesIO
 from datetime import datetime, timedelta, timezone
 
+from docx import Document
+from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
@@ -10,10 +14,13 @@ from app.models.submission import Submission, SubmissionAnswer, SubmissionEvent
 from app.models.user import User
 from app.redis.client import set_value
 from app.schemas.exam import (
+    AutoSubmitRequest,
     ExamCreate,
     ExamUpdate,
     QuestionBulkCreate,
     QuestionCreate,
+    QuestionImportBlockResult,
+    QuestionImportResult,
     SavedAnswerRequest,
     SubmissionCreate,
     SubmissionEventCreate,
@@ -41,10 +48,14 @@ def _validate_question(question_in: QuestionCreate) -> None:
     if question_in.question_type != QuestionType.MCQ:
         raise ValueError("Only multiple-choice questions are supported right now.")
 
-    if len(question_in.options) < 2:
-        raise ValueError("A multiple-choice question needs at least two options.")
+    if not question_in.prompt or not question_in.prompt.strip():
+        raise ValueError("Question prompt cannot be blank.")
 
-    correct_count = sum(1 for option in question_in.options if option.is_correct)
+    non_empty_options = [option for option in question_in.options if option.text and option.text.strip()]
+    if len(non_empty_options) < 2:
+        raise ValueError("A multiple-choice question needs at least two non-empty options.")
+
+    correct_count = sum(1 for option in non_empty_options if option.is_correct)
     if correct_count != 1:
         raise ValueError("A multiple-choice question needs exactly one correct option.")
 
@@ -53,19 +64,20 @@ def _build_question(exam_id: int, question_in: QuestionCreate) -> Question:
     _validate_question(question_in)
     question = Question(
         exam_id=exam_id,
-        prompt=question_in.prompt,
-        explanation=question_in.explanation,
+        prompt=question_in.prompt.strip(),
+        explanation=question_in.explanation.strip() if question_in.explanation else None,
         question_type=question_in.question_type,
         marks=question_in.marks,
         sort_order=question_in.sort_order,
     )
     question.options = [
         QuestionOption(
-            text=option.text,
+            text=option.text.strip(),
             is_correct=option.is_correct,
             sort_order=option.sort_order,
         )
         for option in question_in.options
+        if option.text and option.text.strip()
     ]
     return question
 
@@ -107,7 +119,7 @@ def _sync_question_options(db: Session, question: Question, question_in: Questio
         if option is None:
             option = QuestionOption()
 
-        option.text = option_in.text
+        option.text = option_in.text.strip()
         option.is_correct = option_in.is_correct
         option.sort_order = option_in.sort_order
         next_options.append(option)
@@ -191,10 +203,11 @@ def _validate_exam_ready_for_publish(exam: Exam) -> None:
         if not question.prompt or not question.prompt.strip():
             raise ValueError(f"Question {index} has no prompt.")
 
-        if len(question.options) < 2:
-            raise ValueError(f"Question {index} must have at least two options.")
+        non_empty_options = [option for option in question.options if option.text and option.text.strip()]
+        if len(non_empty_options) < 2:
+            raise ValueError(f"Question {index} must have at least two non-empty options.")
 
-        correct_count = sum(1 for option in question.options if option.is_correct)
+        correct_count = sum(1 for option in non_empty_options if option.is_correct)
         if correct_count != 1:
             raise ValueError(f"Question {index} must have exactly one correct option.")
 
@@ -230,6 +243,19 @@ def _get_active_submission(db: Session, exam_id: int, student_id: int) -> Submis
             Submission.exam_id == exam_id,
             Submission.student_id == student_id,
             Submission.status == SubmissionStatus.IN_PROGRESS,
+        )
+        .options(*_submission_options())
+    )
+    return db.execute(statement).scalars().unique().one_or_none()
+
+
+def _get_submitted_submission(db: Session, exam_id: int, student_id: int) -> Submission | None:
+    statement = (
+        select(Submission)
+        .where(
+            Submission.exam_id == exam_id,
+            Submission.student_id == student_id,
+            Submission.status == SubmissionStatus.SUBMITTED,
         )
         .options(*_submission_options())
     )
@@ -287,6 +313,61 @@ def _upsert_answer(
         answer.is_marked_for_review = is_marked_for_review
 
     return answer
+
+
+def _upsert_submission_answers(
+    submission: Submission,
+    exam: Exam,
+    answers: list,
+    preserve_review_flags: bool = True,
+) -> None:
+    incoming_question_ids = set()
+    for answer in answers:
+        if answer.question_id in incoming_question_ids:
+            raise ValueError("Each question can only be answered once.")
+        incoming_question_ids.add(answer.question_id)
+        existing = _get_answer_for_question(submission, answer.question_id)
+        _upsert_answer(
+            submission=submission,
+            exam=exam,
+            question_id=answer.question_id,
+            selected_option_id=answer.selected_option_id,
+            is_marked_for_review=(
+                existing.is_marked_for_review
+                if preserve_review_flags and existing
+                else False
+            ),
+        )
+
+
+def _auto_submit_submission(
+    db: Session,
+    submission: Submission,
+    exam: Exam,
+    reason: str,
+    answers: list | None = None,
+) -> Submission:
+    if submission.status == SubmissionStatus.SUBMITTED:
+        return get_submission(db, submission.id, submission.student)
+
+    if answers:
+        _upsert_submission_answers(submission, exam, answers)
+
+    submission.score = sum(answer.marks_awarded for answer in submission.answers)
+    submission.status = SubmissionStatus.SUBMITTED
+    submission.submitted_at = datetime.now(timezone.utc)
+
+    event = SubmissionEvent(
+        submission_id=submission.id,
+        event_type="auto_submit",
+        severity="critical",
+        details=reason,
+        metadata_json=None,
+    )
+    db.add(event)
+    db.add(submission)
+    db.commit()
+    return get_submission(db, submission.id, submission.student)
 
 
 def list_exams(db: Session, current_user: User) -> list[Exam]:
@@ -419,8 +500,8 @@ def update_question(
     if not question:
         raise LookupError("Question not found.")
 
-    question.prompt = question_in.prompt
-    question.explanation = question_in.explanation
+    question.prompt = question_in.prompt.strip()
+    question.explanation = question_in.explanation.strip() if question_in.explanation else None
     question.question_type = question_in.question_type
     question.marks = question_in.marks
     question.sort_order = question_in.sort_order
@@ -453,6 +534,236 @@ def delete_question(db: Session, exam_id: int, question_id: int, current_user: U
 
     db.delete(question)
     db.commit()
+
+
+QUESTION_LINE_RE = re.compile(r"^Q(?:uestion)?\s*(\d+)[\).:\-]?\s*(.+)$", re.IGNORECASE)
+OPTION_LINE_RE = re.compile(r"^([A-Da-d])[\).:\-]\s*(.+)$")
+ANSWER_LINE_RE = re.compile(r"^Answer\s*:\s*(.+)$", re.IGNORECASE)
+MARKS_LINE_RE = re.compile(r"^Marks?\s*:\s*(.+)$", re.IGNORECASE)
+EXPLANATION_LINE_RE = re.compile(r"^Explanation\s*:\s*(.*)$", re.IGNORECASE)
+
+
+def _docx_paragraphs(content: bytes) -> list[str]:
+    document = Document(BytesIO(content))
+    lines: list[str] = []
+    for paragraph in document.paragraphs:
+        lines.extend(line.strip() for line in paragraph.text.splitlines() if line.strip())
+    return lines
+
+
+def _split_docx_question_blocks(lines: list[str]) -> list[list[str]]:
+    blocks: list[list[str]] = []
+    current: list[str] = []
+    for line in lines:
+        if QUESTION_LINE_RE.match(line):
+            if current:
+                blocks.append(current)
+            current = [line]
+        elif current:
+            current.append(line)
+        else:
+            continue
+
+    if current:
+        blocks.append(current)
+
+    return blocks
+
+
+def _resolve_correct_option(answer: str, option_labels: list[str], option_texts: list[str]) -> int | None:
+    normalized_answer = answer.strip()
+    if not normalized_answer:
+        return None
+
+    lower_answer = normalized_answer.lower()
+    prefixed_letter = re.match(r"^(?:option\s*)?([a-d])(?:[\).:\-]|\s|$)", lower_answer)
+    if prefixed_letter:
+        option_index = ord(prefixed_letter.group(1)) - ord("a")
+        return option_index if option_index < len(option_texts) and option_texts[option_index].strip() else None
+
+    option_lookup = {label.lower(): index for index, label in enumerate(option_labels)}
+    option_lookup.update({str(index + 1): index for index in range(len(option_texts))})
+    option_lookup.update({f"option{index + 1}": index for index in range(len(option_texts))})
+    if lower_answer in option_lookup:
+        option_index = option_lookup[lower_answer]
+        return option_index if option_index < len(option_texts) and option_texts[option_index].strip() else None
+
+    for index, text in enumerate(option_texts):
+        if text.strip() == normalized_answer:
+            return index
+
+    return None
+
+
+def _question_from_docx_block(block: list[str], block_number: int) -> tuple[QuestionCreate | None, QuestionImportBlockResult]:
+    question_text = ""
+    options_by_label: dict[str, str] = {}
+    answer = ""
+    marks_raw = ""
+    explanation_parts: list[str] = []
+    current_field = ""
+
+    for line in block:
+        question_match = QUESTION_LINE_RE.match(line)
+        option_match = OPTION_LINE_RE.match(line)
+        answer_match = ANSWER_LINE_RE.match(line)
+        marks_match = MARKS_LINE_RE.match(line)
+        explanation_match = EXPLANATION_LINE_RE.match(line)
+
+        if question_match:
+            question_text = question_match.group(2).strip()
+            current_field = "question"
+        elif option_match:
+            label = option_match.group(1).upper()
+            options_by_label[label] = option_match.group(2).strip()
+            current_field = f"option:{label}"
+        elif answer_match:
+            answer = answer_match.group(1).strip()
+            current_field = "answer"
+        elif marks_match:
+            marks_raw = marks_match.group(1).strip()
+            current_field = "marks"
+        elif explanation_match:
+            explanation_parts = [explanation_match.group(1).strip()] if explanation_match.group(1).strip() else []
+            current_field = "explanation"
+        elif current_field == "question":
+            question_text = f"{question_text} {line}".strip()
+        elif current_field.startswith("option:"):
+            label = current_field.split(":", 1)[1]
+            options_by_label[label] = f"{options_by_label.get(label, '')} {line}".strip()
+        elif current_field == "explanation":
+            explanation_parts.append(line)
+
+    errors: list[str] = []
+    if not question_text:
+        errors.append("question is required")
+
+    option_labels = ["A", "B", "C", "D"]
+    option_texts = [options_by_label.get(label, "").strip() for label in option_labels]
+    non_empty_options = [option for option in option_texts if option]
+    if len(non_empty_options) < 2:
+        errors.append("at least 2 options are required")
+
+    if not answer:
+        errors.append("Answer is required")
+        correct_index = None
+    else:
+        correct_index = _resolve_correct_option(answer, option_labels, option_texts)
+        if correct_index is None:
+            errors.append("Answer must match A-D, 1-4, option1-option4, or an option text")
+
+    if marks_raw:
+        try:
+            marks = int(marks_raw)
+        except ValueError:
+            marks = 0
+            errors.append("Marks must be a whole number")
+    else:
+        marks = 1
+    if marks < 1:
+        errors.append("Marks must be at least 1")
+
+    if errors:
+        return None, QuestionImportBlockResult(
+            block_number=block_number,
+            question=question_text or None,
+            valid=False,
+            errors=errors,
+        )
+
+    try:
+        question = QuestionCreate(
+            prompt=question_text,
+            explanation=" ".join(part for part in explanation_parts if part).strip() or None,
+            question_type=QuestionType.MCQ,
+            marks=marks,
+            sort_order=block_number,
+            options=[
+                {
+                    "text": text,
+                    "is_correct": index == correct_index,
+                    "sort_order": index + 1,
+                }
+                for index, text in enumerate(option_texts)
+                if text
+            ],
+        )
+    except (ValidationError, ValueError) as exc:
+        return None, QuestionImportBlockResult(
+            block_number=block_number,
+            question=question_text or None,
+            valid=False,
+            errors=[str(exc)],
+        )
+
+    return question, QuestionImportBlockResult(
+        block_number=block_number,
+        question=question_text,
+        valid=True,
+        errors=[],
+    )
+
+
+def import_questions_from_docx(
+    db: Session,
+    exam_id: int,
+    content: bytes,
+    current_user: User,
+) -> QuestionImportResult:
+    exam = get_exam(db, exam_id, current_user)
+    _ensure_draft_exam(exam)
+
+    try:
+        lines = _docx_paragraphs(content)
+    except Exception as exc:
+        raise ValueError("The Word file could not be read. Upload a valid .docx file.") from exc
+    blocks = _split_docx_question_blocks(lines)
+    if not blocks:
+        return QuestionImportResult(
+            valid_count=0,
+            invalid_count=1,
+            created_count=0,
+            blocks=[
+                QuestionImportBlockResult(
+                    block_number=1,
+                    valid=False,
+                    errors=["No question blocks found in the Word file."],
+                )
+            ],
+        )
+
+    parsed_questions: list[QuestionCreate] = []
+    block_results: list[QuestionImportBlockResult] = []
+    for index, block in enumerate(blocks, start=1):
+        question, result = _question_from_docx_block(block, index)
+        block_results.append(result)
+        if question:
+            parsed_questions.append(question)
+
+    invalid_count = sum(1 for result in block_results if not result.valid)
+    if invalid_count:
+        return QuestionImportResult(
+            valid_count=len(parsed_questions),
+            invalid_count=invalid_count,
+            created_count=0,
+            blocks=block_results,
+        )
+
+    current_question_count = len(exam.questions)
+    questions = []
+    for index, question_in in enumerate(parsed_questions, start=1):
+        question_in.sort_order = current_question_count + index
+        questions.append(_build_question(exam.id, question_in))
+
+    db.add_all(questions)
+    db.commit()
+
+    return QuestionImportResult(
+        valid_count=len(parsed_questions),
+        invalid_count=0,
+        created_count=len(questions),
+        blocks=block_results,
+    )
 
 
 def add_questions_bulk(
@@ -489,16 +800,15 @@ def start_exam(db: Session, exam_id: int, student: User) -> Submission:
 
     existing_submission = _get_active_submission(db, exam.id, student.id)
     if existing_submission:
-        _ensure_submission_not_expired(existing_submission, exam)
-        _cache_exam_session(existing_submission, exam)
-        return existing_submission
+        _auto_submit_submission(
+            db=db,
+            submission=existing_submission,
+            exam=exam,
+            reason="Exam auto-submitted because student attempted to reopen an active exam.",
+        )
+        raise ValueError("This exam attempt was already started and cannot be reopened.")
 
-    submitted_statement = select(Submission).where(
-        Submission.exam_id == exam.id,
-        Submission.student_id == student.id,
-        Submission.status == SubmissionStatus.SUBMITTED,
-    )
-    if db.execute(submitted_statement).scalar_one_or_none():
+    if _get_submitted_submission(db, exam.id, student.id):
         raise ValueError("You have already submitted this exam.")
 
     submission = Submission(
@@ -513,9 +823,13 @@ def start_exam(db: Session, exam_id: int, student: User) -> Submission:
         db.rollback()
         existing_submission = _get_active_submission(db, exam.id, student.id)
         if existing_submission:
-            _ensure_submission_not_expired(existing_submission, exam)
-            _cache_exam_session(existing_submission, exam)
-            return existing_submission
+            _auto_submit_submission(
+                db=db,
+                submission=existing_submission,
+                exam=exam,
+                reason="Exam auto-submitted because student attempted to reopen an active exam.",
+            )
+            raise ValueError("This exam attempt was already started and cannot be reopened.")
         raise ValueError("You have already started or submitted this exam.")
 
     saved_submission = get_submission(db, submission.id, student)
@@ -562,19 +876,7 @@ def submit_exam(
 
     _ensure_submission_not_expired(submission, exam)
 
-    incoming_question_ids = set()
-    for answer in submission_in.answers:
-        if answer.question_id in incoming_question_ids:
-            raise ValueError("Each question can only be answered once.")
-        incoming_question_ids.add(answer.question_id)
-        existing = _get_answer_for_question(submission, answer.question_id)
-        _upsert_answer(
-            submission=submission,
-            exam=exam,
-            question_id=answer.question_id,
-            selected_option_id=answer.selected_option_id,
-            is_marked_for_review=existing.is_marked_for_review if existing else False,
-        )
+    _upsert_submission_answers(submission, exam, submission_in.answers)
 
     answers_by_question_id = {
         answer.question_id: answer for answer in submission.answers if answer.selected_option_id is not None
@@ -592,6 +894,30 @@ def submit_exam(
     db.add(submission)
     db.commit()
     return get_submission(db, submission.id, student)
+
+
+def force_submit_exam(
+    db: Session,
+    exam_id: int,
+    submission_in: AutoSubmitRequest,
+    student: User,
+) -> Submission:
+    exam = get_exam(db, exam_id, student)
+    active_submission = _get_active_submission(db, exam.id, student.id)
+    if active_submission:
+        return _auto_submit_submission(
+            db=db,
+            submission=active_submission,
+            exam=exam,
+            reason=f"Exam auto-submitted because student left the exam screen. Reason: {submission_in.reason}.",
+            answers=submission_in.answers,
+        )
+
+    submitted_submission = _get_submitted_submission(db, exam.id, student.id)
+    if submitted_submission:
+        return submitted_submission
+
+    raise ValueError("Start this exam before auto-submitting.")
 
 
 def record_proctor_event(

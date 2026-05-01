@@ -5,6 +5,7 @@ import {
   BookOpenCheck,
   CheckCircle2,
   ClipboardList,
+  Download,
   Edit,
   Eye,
   Flag,
@@ -25,7 +26,7 @@ import {
   X,
 } from 'lucide-react'
 import { ExamBuilder } from './components/admin/ExamBuilder'
-import { ExportResultsPanel } from './components/admin/ExportResultsPanel'
+import { downloadCsv } from './utils/csv'
 import './index.css'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000/api/v1'
@@ -78,16 +79,18 @@ function isAuthExpiredError(error) {
   return error?.status === 401
 }
 
-async function apiRequest(path, { method = 'GET', token, body } = {}) {
+async function apiRequest(path, { method = 'GET', token, body, keepalive = false } = {}) {
+  const isFormData = body instanceof FormData
   let response
   try {
     response = await fetch(`${API_BASE_URL}${path}`, {
       method,
+      keepalive,
       headers: {
-        'Content-Type': 'application/json',
+        ...(!isFormData ? { 'Content-Type': 'application/json' } : {}),
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
-      body: body ? JSON.stringify(body) : undefined,
+      body: body ? (isFormData ? body : JSON.stringify(body)) : undefined,
     })
   } catch {
     throw new ApiError('Unable to connect to the server. Please make sure the backend is running.')
@@ -154,6 +157,10 @@ function formatStudentExamError(message) {
     return 'This exam attempt is no longer available.'
   }
 
+  if (normalizedMessage.includes('cannot be reopened')) {
+    return 'This exam attempt was already started and cannot be reopened.'
+  }
+
   if (normalizedMessage.includes('exam time has expired')) {
     return 'Your exam session has expired.'
   }
@@ -214,25 +221,37 @@ function formatRemainingTime(totalSeconds) {
 
 function getQuestionStatusLabel(status) {
   const labels = {
-    'not-visited': 'Not visited',
-    'not-answered': 'Not answered',
+    'not-visited': 'Not Visited',
+    'not-answered': 'Not Answered',
     answered: 'Answered',
-    marked: 'Marked for review',
-    'answered-marked': 'Answered and marked',
+    marked: 'Marked for Review',
+    'answered-marked': 'Answered & Marked for Review',
   }
 
   return labels[status] ?? status
 }
 
+const QUESTION_STATUS_ORDER = [
+  'not-visited',
+  'not-answered',
+  'answered',
+  'marked',
+  'answered-marked',
+]
+
 function App() {
   const [auth, setAuth] = useState(readStoredAuth)
+  const logoutGuardRef = useRef(null)
 
   function handleAuthenticated(nextAuth) {
     localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(nextAuth))
     setAuth(nextAuth)
   }
 
-  function handleLogout() {
+  async function handleLogout() {
+    if (logoutGuardRef.current) {
+      await logoutGuardRef.current('logout')
+    }
     localStorage.removeItem(AUTH_STORAGE_KEY)
     setAuth(null)
   }
@@ -241,6 +260,10 @@ function App() {
     localStorage.removeItem(AUTH_STORAGE_KEY)
     setAuth(null)
   }
+
+  const registerLogoutGuard = useCallback((handler) => {
+    logoutGuardRef.current = handler
+  }, [])
 
   if (!auth) {
     return <LoginScreen onAuthenticated={handleAuthenticated} />
@@ -252,7 +275,12 @@ function App() {
       {auth.user.role === 'admin' ? (
         <AdminDashboard token={auth.access_token} onAuthExpired={handleAuthExpired} />
       ) : (
-        <StudentDashboard token={auth.access_token} user={auth.user} onAuthExpired={handleAuthExpired} />
+        <StudentDashboard
+          token={auth.access_token}
+          user={auth.user}
+          onAuthExpired={handleAuthExpired}
+          onLogoutGuardChange={registerLogoutGuard}
+        />
       )}
     </div>
   )
@@ -601,7 +629,7 @@ function TopBar({ user, onLogout }) {
   )
 }
 
-function StudentDashboard({ token, user, onAuthExpired }) {
+function StudentDashboard({ token, user, onAuthExpired, onLogoutGuardChange }) {
   const [exams, setExams] = useState([])
   const [activeExam, setActiveExam] = useState(null)
   const [activeSubmission, setActiveSubmission] = useState(null)
@@ -610,6 +638,9 @@ function StudentDashboard({ token, user, onAuthExpired }) {
   const [result, setResult] = useState(null)
   const [submissions, setSubmissions] = useState([])
   const [status, setStatus] = useState({ loading: true, error: '', success: '' })
+  const activeExamRef = useRef(activeExam)
+  const answersRef = useRef(answers)
+  const autoSubmitInProgressRef = useRef(false)
 
   const selectedCount = Object.values(answers).filter(Boolean).length
   const reviewCount = Object.values(review).filter(Boolean).length
@@ -629,6 +660,14 @@ function StudentDashboard({ token, user, onAuthExpired }) {
     })
     return map
   }, [exams])
+
+  useEffect(() => {
+    activeExamRef.current = activeExam
+  }, [activeExam])
+
+  useEffect(() => {
+    answersRef.current = answers
+  }, [answers])
 
   const loadStudentData = useCallback(async () => {
     setStatus({ loading: true, error: '', success: '' })
@@ -669,11 +708,66 @@ function StudentDashboard({ token, user, onAuthExpired }) {
     [activeExam, onAuthExpired, token],
   )
 
+  const autoSubmitActiveExam = useCallback(
+    async (reason = 'page_leave', { keepalive = false, updateUi = true } = {}) => {
+      const exam = activeExamRef.current
+      if (!exam || autoSubmitInProgressRef.current) return null
+      autoSubmitInProgressRef.current = true
+
+      const requestBody = {
+        reason,
+        answers: Object.entries(answersRef.current).map(([questionId, optionId]) => ({
+          question_id: Number(questionId),
+          selected_option_id: optionId,
+        })),
+      }
+
+      try {
+        const data = await apiRequest(`/exams/${exam.id}/auto-submit`, {
+          method: 'POST',
+          token,
+          keepalive,
+          body: requestBody,
+        })
+
+        if (updateUi) {
+          setResult({ ...data, exam_title: exam.title })
+          setActiveExam(null)
+          setActiveSubmission(null)
+          setAnswers({})
+          setReview({})
+          await loadStudentData()
+          setStatus({
+            loading: false,
+            error: '',
+            success: 'Your exam was submitted because you left the exam screen.',
+          })
+        }
+
+        return data
+      } catch (err) {
+        autoSubmitInProgressRef.current = false
+        if (updateUi) {
+          if (handleAuthenticatedError(err, onAuthExpired)) return null
+          setStatus({ loading: false, error: formatStudentExamError(err.message), success: '' })
+        }
+        return null
+      }
+    },
+    [loadStudentData, onAuthExpired, token],
+  )
+
+  useEffect(() => {
+    onLogoutGuardChange(activeExam ? () => autoSubmitActiveExam('logout') : null)
+    return () => onLogoutGuardChange(null)
+  }, [activeExam, autoSubmitActiveExam, onLogoutGuardChange])
+
   async function startExam(exam) {
     setStatus({ loading: true, error: '', success: '' })
     try {
       const submission = await apiRequest(`/exams/${exam.id}/start`, { method: 'POST', token })
       const mapped = mapSubmissionAnswers(submission)
+      autoSubmitInProgressRef.current = false
       setActiveExam(exam)
       setActiveSubmission(submission)
       setAnswers(mapped.answers)
@@ -730,6 +824,12 @@ function StudentDashboard({ token, user, onAuthExpired }) {
 
   async function submitExam({ skipConfirmation = false, auto = false } = {}) {
     if (!canSubmit) return
+
+    if (auto) {
+      await autoSubmitActiveExam('time_expired')
+      return
+    }
+
     const unansweredCount = Math.max(0, totalQuestions - selectedCount)
 
     if (!skipConfirmation) {
@@ -752,6 +852,7 @@ function StudentDashboard({ token, user, onAuthExpired }) {
           })),
         },
       })
+      autoSubmitInProgressRef.current = true
       setResult({ ...data, exam_title: activeExam.title })
       setActiveExam(null)
       setActiveSubmission(null)
@@ -808,7 +909,8 @@ function StudentDashboard({ token, user, onAuthExpired }) {
           onClear={clearAnswer}
           onToggleReview={toggleReview}
           onSubmit={submitExam}
-          onCancel={() => setActiveExam(null)}
+          onAutoSubmit={autoSubmitActiveExam}
+          onCancel={() => autoSubmitActiveExam('screen_leave')}
           onProctorEvent={reportEvent}
         />
       ) : (
@@ -896,9 +998,14 @@ function StudentExamCard({ exam, submission, onStart }) {
             : 'You have already completed this exam. Results are not published yet.'}
         </p>
       ) : (
-        <button className="primary-button" type="button" onClick={onStart}>
-          Start exam
-        </button>
+        <>
+          <p className="exam-start-warning">
+            Do not refresh, close, switch tabs, or leave the exam screen. Doing so will submit your exam automatically.
+          </p>
+          <button className="primary-button" type="button" onClick={onStart}>
+            Start exam
+          </button>
+        </>
       )}
     </article>
   )
@@ -918,6 +1025,7 @@ function ExamAttempt({
   onClear,
   onToggleReview,
   onSubmit,
+  onAutoSubmit,
   onCancel,
   onProctorEvent,
 }) {
@@ -939,6 +1047,18 @@ function ExamAttempt({
   const isFirstQuestion = currentIndex === 0
   const isUrgent = Boolean(deadline) && remainingSeconds <= 60
   const currentStatus = currentQuestion ? getQuestionStatus(currentQuestion) : 'not-visited'
+  const statusCounts = {
+    'not-visited': 0,
+    'not-answered': 0,
+    answered: 0,
+    marked: 0,
+    'answered-marked': 0,
+  }
+
+  questions.forEach((question) => {
+    const questionStatus = getQuestionStatus(question)
+    statusCounts[questionStatus] += 1
+  })
 
   useEffect(() => {
     autoSubmitRef.current = false
@@ -959,13 +1079,14 @@ function ExamAttempt({
   useEffect(() => {
     if (!deadline || remainingSeconds > 0 || autoSubmitRef.current) return
     autoSubmitRef.current = true
-    void onSubmit({ skipConfirmation: true, auto: true })
-  }, [deadline, onSubmit, remainingSeconds])
+    void onAutoSubmit('time_expired')
+  }, [deadline, onAutoSubmit, remainingSeconds])
 
   useEffect(() => {
     function logVisibility() {
       if (document.visibilityState === 'hidden') {
         void onProctorEvent('tab_hidden', 'Student switched away from the exam tab.')
+        void onAutoSubmit('tab_hidden', { keepalive: true })
       }
     }
     function logBlur() {
@@ -974,9 +1095,17 @@ function ExamAttempt({
     function logClipboard(event) {
       void onProctorEvent(event.type, `Clipboard event detected: ${event.type}.`)
     }
+    function handlePageLeave() {
+      void onAutoSubmit('page_leave', { keepalive: true, updateUi: false })
+    }
+    function handleBeforeUnload() {
+      handlePageLeave()
+    }
 
     document.addEventListener('visibilitychange', logVisibility)
     window.addEventListener('blur', logBlur)
+    window.addEventListener('pagehide', handlePageLeave)
+    window.addEventListener('beforeunload', handleBeforeUnload)
     document.addEventListener('copy', logClipboard)
     document.addEventListener('paste', logClipboard)
     document.addEventListener('contextmenu', logClipboard)
@@ -984,11 +1113,13 @@ function ExamAttempt({
     return () => {
       document.removeEventListener('visibilitychange', logVisibility)
       window.removeEventListener('blur', logBlur)
+      window.removeEventListener('pagehide', handlePageLeave)
+      window.removeEventListener('beforeunload', handleBeforeUnload)
       document.removeEventListener('copy', logClipboard)
       document.removeEventListener('paste', logClipboard)
       document.removeEventListener('contextmenu', logClipboard)
     }
-  }, [onProctorEvent])
+  }, [onAutoSubmit, onProctorEvent])
 
   function getQuestionStatus(question) {
     const isAnswered = Boolean(answers[question.id])
@@ -1051,6 +1182,9 @@ function ExamAttempt({
             <p className="eyebrow">In progress</p>
             <h2>{exam.title}</h2>
             <p>{user.full_name} - {user.email}</p>
+            <p className="exam-security-warning">
+              Do not refresh, close, switch tabs, or leave the exam screen. Doing so will submit your exam automatically.
+            </p>
           </div>
           <div className="attempt-topbar-actions">
             <span className={`timer-pill ${isUrgent ? 'urgent' : ''}`}>
@@ -1160,6 +1294,7 @@ function ExamAttempt({
                     key={question.id}
                     onClick={() => goToQuestion(index)}
                     aria-label={`Question ${index + 1}: ${getQuestionStatusLabel(state)}`}
+                    aria-current={currentIndex === index ? 'true' : undefined}
                   >
                     {index + 1}
                   </button>
@@ -1167,12 +1302,16 @@ function ExamAttempt({
               })}
             </div>
 
-            <div className="palette-legend">
-              <span><i className="legend-dot not-visited" /> Not visited</span>
-              <span><i className="legend-dot not-answered" /> Not answered</span>
-              <span><i className="legend-dot answered" /> Answered</span>
-              <span><i className="legend-dot marked" /> Marked</span>
-              <span><i className="legend-dot answered-marked" /> Answered & marked</span>
+            <div className="palette-legend" aria-label="Question status legend">
+              {QUESTION_STATUS_ORDER.map((state) => (
+                <div className={`legend-row ${state}`} key={state}>
+                  <span className={`status-icon ${state}`} aria-hidden="true" />
+                  <span className="legend-label">{getQuestionStatusLabel(state)}</span>
+                  <strong className="legend-count" aria-label={`${statusCounts[state]} questions`}>
+                    {statusCounts[state]}
+                  </strong>
+                </div>
+              ))}
             </div>
           </aside>
         </div>
@@ -1203,6 +1342,12 @@ function AdminDashboard({ token, onAuthExpired }) {
   const [roleFilter, setRoleFilter] = useState('all')
   const [resetState, setResetState] = useState({ userId: null, password: '' })
   const [deleteExamCandidate, setDeleteExamCandidate] = useState(null)
+  const [examListTab, setExamListTab] = useState('active')
+  const [resultExamSearch, setResultExamSearch] = useState('')
+  const [resultStudentSearch, setResultStudentSearch] = useState('')
+  const [resultStatusFilter, setResultStatusFilter] = useState('all')
+  const [resultPublishFilter, setResultPublishFilter] = useState('all')
+  const isPersistingDraftRef = useRef(false)
 
   const dashboardSummary = useMemo(() => {
     const submittedScores = submissions
@@ -1224,6 +1369,56 @@ function AdminDashboard({ token, onAuthExpired }) {
       average_score: summary?.average_score ?? localAverage,
     }
   }, [exams, submissions, summary, users])
+
+  const activeExams = useMemo(() => exams.filter((exam) => !exam.is_archived), [exams])
+  const archivedExams = useMemo(() => exams.filter((exam) => exam.is_archived), [exams])
+  const visibleExamList = examListTab === 'archived' ? archivedExams : activeExams
+  const examById = useMemo(
+    () => new Map(exams.map((exam) => [exam.id, exam])),
+    [exams],
+  )
+  const submissionCountByExamId = useMemo(() => {
+    const counts = new Map()
+    submissions.forEach((submission) => {
+      counts.set(submission.exam_id, (counts.get(submission.exam_id) ?? 0) + 1)
+    })
+    return counts
+  }, [submissions])
+  const filteredResultSubmissions = useMemo(() => {
+    const examSearch = resultExamSearch.trim().toLowerCase()
+    const studentSearch = resultStudentSearch.trim().toLowerCase()
+    return submissions.filter((submission) => {
+      const exam = examById.get(submission.exam_id)
+      const examText = [exam?.title, exam?.subject].filter(Boolean).join(' ').toLowerCase()
+      const studentText = [
+        submission.student_full_name,
+        submission.student_email,
+        submission.student_register_number,
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase()
+      const isResultPublished = Boolean(exam?.is_result_published)
+
+      return (
+        (!examSearch || examText.includes(examSearch)) &&
+        (!studentSearch || studentText.includes(studentSearch)) &&
+        (resultStatusFilter === 'all' || submission.status === resultStatusFilter) &&
+        (
+          resultPublishFilter === 'all' ||
+          (resultPublishFilter === 'published' && isResultPublished) ||
+          (resultPublishFilter === 'not-published' && !isResultPublished)
+        )
+      )
+    })
+  }, [
+    examById,
+    resultExamSearch,
+    resultPublishFilter,
+    resultStatusFilter,
+    resultStudentSearch,
+    submissions,
+  ])
 
   const filteredUsers = useMemo(() => {
     const search = userSearch.trim().toLowerCase()
@@ -1256,17 +1451,20 @@ function AdminDashboard({ token, onAuthExpired }) {
         setExams(examData)
         setUsers(userData)
         setSummary(summaryData)
-        const nextExamId = examId ?? examData[0]?.id
+        const submissionSets = await Promise.all(
+          examData.map((exam) => apiRequest(`/exams/${exam.id}/submissions`, { token })),
+        )
+        const allSubmissions = submissionSets.flat()
+        setSubmissions(allSubmissions)
+        const requestedExamExists = examId && examData.some((exam) => exam.id === examId)
+        const nextExamId = requestedExamExists
+          ? examId
+          : examData.find((exam) => !exam.is_archived)?.id ?? examData[0]?.id
         if (nextExamId) {
-          const [detailedExam, submissionData] = await Promise.all([
-            apiRequest(`/exams/${nextExamId}/admin`, { token }),
-            apiRequest(`/exams/${nextExamId}/submissions`, { token }),
-          ])
+          const detailedExam = await apiRequest(`/exams/${nextExamId}/admin`, { token })
           setSelectedExam(detailedExam)
-          setSubmissions(submissionData)
         } else {
           setSelectedExam(null)
-          setSubmissions([])
         }
       } catch (err) {
         if (handleAuthenticatedError(err, onAuthExpired)) return
@@ -1294,6 +1492,8 @@ function AdminDashboard({ token, onAuthExpired }) {
   }
 
   async function persistBuilderDraft(draft, publishAfterSave = false) {
+    if (isPersistingDraftRef.current) return
+
     if (!draft.metadata.title) {
       setStatus({ loading: false, error: 'Exam title is required.', success: '' })
       return
@@ -1305,6 +1505,7 @@ function AdminDashboard({ token, onAuthExpired }) {
     }
 
     setStatus({ loading: true, error: '', success: '' })
+    isPersistingDraftRef.current = true
     try {
       const metadata = {
         title: draft.metadata.title,
@@ -1386,6 +1587,8 @@ function AdminDashboard({ token, onAuthExpired }) {
       await loadAdminData(examId)
     } catch (err) {
       showError(err)
+    } finally {
+      isPersistingDraftRef.current = false
     }
   }
 
@@ -1424,6 +1627,66 @@ function AdminDashboard({ token, onAuthExpired }) {
       await loadAdminData(selectedExam.id)
     } catch (err) {
       showError(err)
+    }
+  }
+
+  async function importWordQuestions(file) {
+    if (!selectedExam?.id) {
+      setStatus({ loading: false, error: 'Save the exam draft before importing a Word file.', success: '' })
+      return null
+    }
+
+    setStatus({ loading: true, error: '', success: '' })
+    const wasPublished = Boolean(selectedExam.is_published)
+    let unpublishedForImport = false
+
+    try {
+      if (wasPublished) {
+        await apiRequest(`/exams/${selectedExam.id}/publish`, {
+          method: 'PATCH',
+          token,
+          body: { is_published: false },
+        })
+        unpublishedForImport = true
+      }
+
+      const formData = new FormData()
+      formData.append('file', file)
+      const result = await apiRequest(`/exams/${selectedExam.id}/questions/import-docx`, {
+        method: 'POST',
+        token,
+        body: formData,
+      })
+
+      if (unpublishedForImport) {
+        await apiRequest(`/exams/${selectedExam.id}/publish`, {
+          method: 'PATCH',
+          token,
+          body: { is_published: true },
+        })
+      }
+
+      setStatus({
+        loading: false,
+        error: result.invalid_count > 0 ? 'Word import found invalid question blocks. No questions were created.' : '',
+        success: result.invalid_count > 0 ? '' : `${result.created_count} Word question${result.created_count === 1 ? '' : 's'} imported.`,
+      })
+      await loadAdminData(selectedExam.id)
+      return result
+    } catch (err) {
+      if (unpublishedForImport) {
+        try {
+          await apiRequest(`/exams/${selectedExam.id}/publish`, {
+            method: 'PATCH',
+            token,
+            body: { is_published: true },
+          })
+        } catch {
+          // The original error is more useful to show here.
+        }
+      }
+      showError(err)
+      return null
     }
   }
 
@@ -1473,6 +1736,7 @@ function AdminDashboard({ token, onAuthExpired }) {
         error: '',
         success: exam.is_archived ? 'Exam restored.' : 'Exam archived.',
       })
+      setExamListTab(exam.is_archived ? 'active' : 'archived')
       await loadAdminData(exam.id)
     } catch (err) {
       showError(err)
@@ -1575,6 +1839,75 @@ function AdminDashboard({ token, onAuthExpired }) {
     }
   }
 
+  function getTotalMarks(exam) {
+    return exam?.questions?.reduce((total, question) => total + Number(question.marks || 0), 0) ?? 0
+  }
+
+  function exportFilteredResults() {
+    const rows = filteredResultSubmissions.map((submission) => {
+      const exam = examById.get(submission.exam_id)
+      const totalMarks = getTotalMarks(exam)
+      return {
+        exam_title: exam?.title ?? `Exam ${submission.exam_id}`,
+        student_name: submission.student_full_name,
+        register_number: submission.student_register_number ?? '',
+        department: submission.student_department ?? '',
+        section: submission.student_class_name ?? submission.student_batch ?? '',
+        score: submission.score ?? '',
+        total_marks: totalMarks,
+        submission_status: submission.status,
+        submitted_time: submission.submitted_at ?? '',
+        result_published_status: exam?.is_result_published ? 'Results Published' : 'Results Not Published',
+      }
+    })
+
+    if (!downloadCsv('filtered-results.csv', [
+      'exam_title',
+      'student_name',
+      'register_number',
+      'department',
+      'section',
+      'score',
+      'total_marks',
+      'submission_status',
+      'submitted_time',
+      'result_published_status',
+    ], rows)) {
+      setStatus({ loading: false, error: 'No submissions match your search.', success: '' })
+      return
+    }
+    setStatus({ loading: false, error: '', success: 'Filtered results exported.' })
+  }
+
+  function exportSubmissionDetails(submission) {
+    const exam = examById.get(submission.exam_id)
+    const rows = submission.answers.map((answer, index) => ({
+      exam_title: exam?.title ?? `Exam ${submission.exam_id}`,
+      student_name: submission.student_full_name,
+      register_number: submission.student_register_number ?? '',
+      question_number: index + 1,
+      question_text: answer.question_prompt,
+      selected_answer: answer.selected_option_text ?? '',
+      correct_answer: answer.correct_option_text ?? '',
+      marks_awarded: answer.marks_awarded,
+    }))
+
+    if (!downloadCsv('student-detailed-response.csv', [
+      'exam_title',
+      'student_name',
+      'register_number',
+      'question_number',
+      'question_text',
+      'selected_answer',
+      'correct_answer',
+      'marks_awarded',
+    ], rows)) {
+      setStatus({ loading: false, error: 'No detailed responses exist for this submission.', success: '' })
+      return
+    }
+    setStatus({ loading: false, error: '', success: 'Detailed response exported.' })
+  }
+
   return (
     <main className="workspace">
       <section className="dashboard-hero admin">
@@ -1620,7 +1953,7 @@ function AdminDashboard({ token, onAuthExpired }) {
           <section className="content-grid admin-grid">
             <div className="main-column">
               <div className="section-title-row">
-                <SectionTitle icon={ClipboardList} eyebrow="Catalog" title="All exams" />
+                <SectionTitle icon={ClipboardList} eyebrow="Catalog" title="Exams" />
                 <button
                   className="primary-button"
                   type="button"
@@ -1635,9 +1968,27 @@ function AdminDashboard({ token, onAuthExpired }) {
                   Add New Exam
                 </button>
               </div>
+              <div className="segmented-control exam-list-tabs" aria-label="Exam folders">
+                <button
+                  className={examListTab === 'active' ? 'active' : ''}
+                  type="button"
+                  onClick={() => setExamListTab('active')}
+                >
+                  Active Exams ({activeExams.length})
+                </button>
+                <button
+                  className={examListTab === 'archived' ? 'active' : ''}
+                  type="button"
+                  onClick={() => setExamListTab('archived')}
+                >
+                  Archived Exams ({archivedExams.length})
+                </button>
+              </div>
               {status.loading && exams.length === 0 ? <LoadingBlock label="Loading exams" /> : null}
               <div className="exam-list">
-                {exams.map((exam) => (
+                {visibleExamList.map((exam) => {
+                  const hasSubmissions = (submissionCountByExamId.get(exam.id) ?? 0) > 0
+                  return (
                   <article
                     className={`exam-card selectable ${selectedExam?.id === exam.id ? 'selected' : ''}`}
                     key={exam.id}
@@ -1651,33 +2002,40 @@ function AdminDashboard({ token, onAuthExpired }) {
                       <span>{exam.questions.length} questions</span>
                       <span>{exam.is_archived ? 'Archived' : exam.is_published ? 'Published' : 'Draft'}</span>
                       <span>{exam.is_result_published ? 'Results Published' : 'Results Not Published'}</span>
+                      <span>{submissionCountByExamId.get(exam.id) ?? 0} submissions</span>
                     </div>
                     <div className="card-actions">
-                      <button className="secondary-button" type="button" onClick={() => selectExam(exam.id)}>
-                        <Edit size={16} aria-hidden="true" />
-                        Edit
-                      </button>
-                      <button
-                        className="secondary-button"
-                        type="button"
-                        onClick={() => togglePublished(exam)}
-                        disabled={exam.is_archived || status.loading}
-                      >
-                        {exam.is_published ? 'Unpublish' : 'Publish'}
-                      </button>
+                      {!exam.is_archived ? (
+                        <>
+                          <button className="secondary-button" type="button" onClick={() => selectExam(exam.id)}>
+                            <Edit size={16} aria-hidden="true" />
+                            Edit
+                          </button>
+                          <button
+                            className="secondary-button"
+                            type="button"
+                            onClick={() => togglePublished(exam)}
+                            disabled={status.loading}
+                          >
+                            {exam.is_published ? 'Unpublish' : 'Publish'}
+                          </button>
+                        </>
+                      ) : null}
                       <button className="secondary-button" type="button" onClick={() => toggleArchived(exam)}>
                         <Archive size={16} aria-hidden="true" />
                         {exam.is_archived ? 'Unarchive' : 'Archive'}
                       </button>
-                      <button
-                        className="secondary-button"
-                        type="button"
-                        onClick={() => toggleResultsPublished(exam)}
-                        disabled={status.loading}
-                      >
-                        <CheckCircle2 size={16} aria-hidden="true" />
-                        {exam.is_result_published ? 'Unpublish Results' : 'Publish Results'}
-                      </button>
+                      {!exam.is_archived ? (
+                        <button
+                          className="secondary-button"
+                          type="button"
+                          onClick={() => toggleResultsPublished(exam)}
+                          disabled={status.loading}
+                        >
+                          <CheckCircle2 size={16} aria-hidden="true" />
+                          {exam.is_result_published ? 'Unpublish Results' : 'Publish Results'}
+                        </button>
+                      ) : null}
                       <button
                         className="secondary-button"
                         type="button"
@@ -1689,18 +2047,25 @@ function AdminDashboard({ token, onAuthExpired }) {
                         <Eye size={16} aria-hidden="true" />
                         View Submissions
                       </button>
-                      <button
-                        className="secondary-button danger-button"
-                        type="button"
-                        onClick={() => setDeleteExamCandidate(exam)}
-                      >
-                        <Trash2 size={16} aria-hidden="true" />
-                        Delete
-                      </button>
+                      {!hasSubmissions ? (
+                        <button
+                          className="secondary-button danger-button"
+                          type="button"
+                          onClick={() => setDeleteExamCandidate(exam)}
+                        >
+                          <Trash2 size={16} aria-hidden="true" />
+                          Delete
+                        </button>
+                      ) : null}
                     </div>
                   </article>
-                ))}
-                {exams.length === 0 && !status.loading ? <p className="empty-state">No exams exist yet.</p> : null}
+                  )
+                })}
+                {visibleExamList.length === 0 && !status.loading ? (
+                  <p className="empty-state">
+                    {examListTab === 'archived' ? 'No archived exams yet.' : 'No active exams exist yet.'}
+                  </p>
+                ) : null}
               </div>
             </div>
 
@@ -1711,6 +2076,7 @@ function AdminDashboard({ token, onAuthExpired }) {
                 onSaveDraft={(draft) => persistBuilderDraft(draft, false)}
                 onPublish={(draft) => persistBuilderDraft(draft, true)}
                 onDeleteQuestion={deleteBuilderQuestion}
+                onImportWord={importWordQuestions}
               />
             </aside>
           </section>
@@ -1873,21 +2239,129 @@ function AdminDashboard({ token, onAuthExpired }) {
         </section>
       ) : null}
 
-      {activeTab === 'results' && selectedExam ? (
-        <>
-          <ExportResultsPanel
-            exams={exams}
-            selectedExam={selectedExam}
-            submissions={submissions}
-            onSelectExam={selectExam}
-          />
-          <SubmissionReviewPanel submissions={submissions} />
-        </>
-      ) : null}
+      {activeTab === 'results' ? (
+        <section className="details-band results-workspace">
+          <div className="panel-title-row">
+            <SectionTitle icon={Flag} eyebrow="Results" title="Submission results" />
+            <button
+              className="primary-button"
+              type="button"
+              onClick={exportFilteredResults}
+              disabled={filteredResultSubmissions.length === 0}
+            >
+              <Download size={16} aria-hidden="true" />
+              Export Filtered CSV
+            </button>
+          </div>
 
-      {activeTab === 'results' && !selectedExam ? (
-        <section className="details-band">
-          <p className="empty-state">Select an exam to view submissions.</p>
+          <div className="results-filter-bar">
+            <label className="search-box">
+              <Search size={16} aria-hidden="true" />
+              <input
+                type="search"
+                placeholder="Search exam by title or subject..."
+                value={resultExamSearch}
+                onChange={(event) => setResultExamSearch(event.target.value)}
+              />
+            </label>
+            <label className="search-box">
+              <Search size={16} aria-hidden="true" />
+              <input
+                type="search"
+                placeholder="Search student by name, email, or register number..."
+                value={resultStudentSearch}
+                onChange={(event) => setResultStudentSearch(event.target.value)}
+              />
+            </label>
+            <select
+              value={resultStatusFilter}
+              onChange={(event) => setResultStatusFilter(event.target.value)}
+              aria-label="Submission status"
+            >
+              <option value="all">All</option>
+              <option value="submitted">Submitted</option>
+              <option value="in_progress">In Progress</option>
+            </select>
+            <select
+              value={resultPublishFilter}
+              onChange={(event) => setResultPublishFilter(event.target.value)}
+              aria-label="Result publication status"
+            >
+              <option value="all">All</option>
+              <option value="published">Results Published</option>
+              <option value="not-published">Results Not Published</option>
+            </select>
+          </div>
+
+          <div className="results-table-wrap">
+            <table className="results-table">
+              <thead>
+                <tr>
+                  <th>Exam title</th>
+                  <th>Student name</th>
+                  <th>Register number</th>
+                  <th>Department</th>
+                  <th>Section</th>
+                  <th>Score</th>
+                  <th>Submission status</th>
+                  <th>Submitted time</th>
+                  <th>Result status</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredResultSubmissions.map((submission) => {
+                  const exam = examById.get(submission.exam_id)
+                  return (
+                    <tr key={submission.id}>
+                      <td>{exam?.title ?? `Exam ${submission.exam_id}`}</td>
+                      <td>
+                        <strong>{submission.student_full_name}</strong>
+                        <span>{submission.student_email}</span>
+                      </td>
+                      <td>{submission.student_register_number ?? '-'}</td>
+                      <td>{submission.student_department ?? '-'}</td>
+                      <td>{submission.student_class_name ?? submission.student_batch ?? '-'}</td>
+                      <td>{submission.score ?? '-'}</td>
+                      <td>{submission.status === 'submitted' ? 'Submitted' : 'In Progress'}</td>
+                      <td>{formatDateTime(submission.submitted_at)}</td>
+                      <td>{exam?.is_result_published ? 'Results Published' : 'Results Not Published'}</td>
+                      <td>
+                        <div className="table-actions">
+                          <button
+                            className="secondary-button"
+                            type="button"
+                            onClick={() => {
+                              if (exam) {
+                                void selectExam(exam.id)
+                              }
+                            }}
+                          >
+                            <Eye size={16} aria-hidden="true" />
+                            View
+                          </button>
+                          <button
+                            className="secondary-button"
+                            type="button"
+                            onClick={() => exportSubmissionDetails(submission)}
+                          >
+                            <Download size={16} aria-hidden="true" />
+                            Details
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          {filteredResultSubmissions.length === 0 ? (
+            <p className="empty-state">No submissions match your search.</p>
+          ) : null}
+
+          <SubmissionReviewPanel submissions={filteredResultSubmissions} />
         </section>
       ) : null}
 

@@ -1,11 +1,12 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from sqlalchemy.orm import Session
 
-from app.api.deps.auth import get_current_user, get_db, require_admin
+from app.api.deps.auth import get_current_user, get_db, require_admin, require_student
 from app.models.user import User
 from app.schemas.exam import (
     ExamAdminRead,
     ExamArchive,
+    AutoSubmitRequest,
     ExamCreate,
     ExamPublish,
     ExamResultPublish,
@@ -14,6 +15,7 @@ from app.schemas.exam import (
     QuestionAdminRead,
     QuestionBulkCreate,
     QuestionCreate,
+    QuestionImportResult,
     SavedAnswerRequest,
     SubmissionCreate,
     SubmissionEventCreate,
@@ -26,7 +28,9 @@ from app.services.exam_service import (
     create_exam,
     delete_exam,
     delete_question,
+    force_submit_exam,
     get_exam,
+    import_questions_from_docx,
     list_exam_submissions,
     list_exams,
     list_my_submissions,
@@ -127,7 +131,7 @@ def update_existing_exam(
 @router.get("/submissions/me", response_model=list[StudentSubmissionRead])
 def read_my_submissions(
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_student),
 ):
     return [_student_submission_response(submission) for submission in list_my_submissions(db, current_user)]
 
@@ -245,6 +249,35 @@ def create_exam_questions_bulk(
         _raise_bad_request(exc)
 
 
+@router.post("/{exam_id}/questions/import-docx", response_model=QuestionImportResult)
+async def import_exam_questions_from_docx(
+    exam_id: int,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    filename = (file.filename or "").lower()
+    if not filename.endswith(".docx"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only .docx files are supported.",
+        )
+
+    content = await file.read()
+    if not content:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="The uploaded Word file is empty.",
+        )
+
+    try:
+        return import_questions_from_docx(db, exam_id, content, current_user)
+    except LookupError as exc:
+        _raise_not_found(exc)
+    except ValueError as exc:
+        _raise_bad_request(exc)
+
+
 @router.put("/{exam_id}/questions/{question_id}", response_model=QuestionAdminRead)
 def update_exam_question(
     exam_id: int,
@@ -280,7 +313,7 @@ def delete_exam_question(
 def start_exam_attempt(
     exam_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_student),
 ):
     try:
         return _student_submission_response(start_exam(db, exam_id, current_user))
@@ -295,7 +328,7 @@ def save_exam_answer(
     exam_id: int,
     payload: SavedAnswerRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_student),
 ):
     try:
         return _student_submission_response(save_answer(db, exam_id, payload, current_user))
@@ -310,10 +343,25 @@ def submit_exam_attempt(
     exam_id: int,
     payload: SubmissionCreate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_student),
 ):
     try:
         return _student_submission_response(submit_exam(db, exam_id, payload, current_user))
+    except LookupError as exc:
+        _raise_not_found(exc)
+    except ValueError as exc:
+        _raise_bad_request(exc)
+
+
+@router.post("/{exam_id}/auto-submit", response_model=StudentSubmissionRead)
+def auto_submit_exam_attempt(
+    exam_id: int,
+    payload: AutoSubmitRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_student),
+):
+    try:
+        return _student_submission_response(force_submit_exam(db, exam_id, payload, current_user))
     except LookupError as exc:
         _raise_not_found(exc)
     except ValueError as exc:
@@ -325,7 +373,7 @@ def record_exam_proctor_event(
     exam_id: int,
     payload: SubmissionEventCreate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_student),
 ):
     try:
         return _student_submission_response(record_proctor_event(db, exam_id, payload, current_user))

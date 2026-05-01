@@ -3,6 +3,7 @@ import { BookOpenCheck, CheckCircle2, FilePlus2, Plus, Rocket, Save } from 'luci
 import { CsvImportPanel } from './CsvImportPanel'
 import { QuestionEditor } from './QuestionEditor'
 import { QuestionNavigator } from './QuestionNavigator'
+import { WordImportPanel } from './WordImportPanel'
 
 const emptyMetadata = {
   title: '',
@@ -55,6 +56,15 @@ function fromApiQuestion(question, index) {
 
 function toApiQuestion(question, index) {
   const correctIndex = Number(question.correctAnswer.replace('option', '')) - 1
+  const options = ['option1', 'option2', 'option3', 'option4']
+    .map((field, optionIndex) => ({
+      id: question.optionIds?.[field] ?? null,
+      text: question[field].trim(),
+      is_correct: optionIndex === correctIndex,
+      sort_order: optionIndex + 1,
+    }))
+    .filter((option) => option.text)
+
   return {
     id: question.backendId,
     prompt: question.question.trim(),
@@ -62,23 +72,32 @@ function toApiQuestion(question, index) {
     question_type: 'mcq',
     marks: Number(question.marks || 1),
     sort_order: index + 1,
-    options: ['option1', 'option2', 'option3', 'option4'].map((field, optionIndex) => ({
-      id: question.optionIds?.[field] ?? null,
-      text: question[field].trim(),
-      is_correct: optionIndex === correctIndex,
-      sort_order: optionIndex + 1,
-    })),
+    options,
   }
 }
 
 function isCompleteQuestion(question) {
+  const optionFields = ['option1', 'option2', 'option3', 'option4']
+  const filledOptions = optionFields.filter((field) => question[field].trim())
+  const selectedCorrectAnswer = question.correctAnswer
+
   return (
     question.question.trim() &&
-    question.option1.trim() &&
-    question.option2.trim() &&
-    question.option3.trim() &&
-    question.option4.trim() &&
+    filledOptions.length >= 2 &&
+    filledOptions.includes(selectedCorrectAnswer) &&
     Number(question.marks) > 0
+  )
+}
+
+function isBlankLocalQuestion(question) {
+  return (
+    question &&
+    !question.backendId &&
+    !question.question.trim() &&
+    !question.option1.trim() &&
+    !question.option2.trim() &&
+    !question.option3.trim() &&
+    !question.option4.trim()
   )
 }
 
@@ -92,6 +111,7 @@ export function ExamBuilder({
   onSaveDraft,
   onPublish,
   onDeleteQuestion,
+  onImportWord,
 }) {
   const [metadata, setMetadata] = useState(emptyMetadata)
   const [questions, setQuestions] = useState([createEmptyQuestion(0)])
@@ -161,8 +181,15 @@ export function ExamBuilder({
 
   function generateQuestionSlots() {
     const count = Math.max(1, Number(generateCount || 1))
-    setDraftQuestions(Array.from({ length: count }, (_, index) => createEmptyQuestion(index)))
-    setActiveIndex(0)
+    const nextQuestions = setDraftQuestions((current) => {
+      const baseQuestions =
+        current.length === 1 && isBlankLocalQuestion(current[0]) ? [] : current
+      const newSlots = Array.from({ length: count }, (_, index) =>
+        createEmptyQuestion(baseQuestions.length + index),
+      )
+      return [...baseQuestions, ...newSlots]
+    })
+    setActiveIndex(Math.max(0, nextQuestions.length - count))
     setImportMessage('')
   }
 
@@ -360,6 +387,11 @@ export function ExamBuilder({
       </div>
 
       <CsvImportPanel disabled={isSaving} onImport={importQuestions} />
+      <WordImportPanel
+        disabled={isSaving}
+        hasSavedExam={Boolean(selectedExam?.id)}
+        onImport={onImportWord}
+      />
       {importMessage ? <p className="notice success">{importMessage}</p> : null}
       {isPublished ? (
         <p className="notice success">
