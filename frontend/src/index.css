@@ -867,6 +867,38 @@ select:focus {
   box-shadow: var(--shadow);
 }
 
+.submission-detail-modal {
+  width: min(1040px, 100%);
+  max-height: min(88vh, 900px);
+  overflow: auto;
+}
+
+.submission-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 12px;
+}
+
+.submission-detail-grid > div {
+  display: grid;
+  gap: 5px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfdfc;
+}
+
+.submission-detail-grid span {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.submission-detail-grid strong {
+  overflow-wrap: anywhere;
+}
+
 .modal-close {
   position: absolute;
   top: 14px;

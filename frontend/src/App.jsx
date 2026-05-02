@@ -187,6 +187,19 @@ function formatDateTime(value) {
   return date.toLocaleString()
 }
 
+function sanitizeCsvFilename(value) {
+  return String(value || 'exam')
+    .trim()
+    .replace(/[^a-z0-9]+/gi, '-')
+    .replace(/^-+|-+$/g, '')
+    .toLowerCase() || 'exam'
+}
+
+function getSubmissionAnswerStatus(answer) {
+  if (!answer?.selected_option_id) return 'Unanswered'
+  return answer.is_correct ? 'Correct' : 'Wrong'
+}
+
 function getAttemptDeadline(submission, exam) {
   const startedAt = submission?.started_at ? new Date(submission.started_at) : null
   const endsAt = exam.ends_at ? new Date(exam.ends_at) : null
@@ -643,17 +656,22 @@ function StudentDashboard({ token, user, onAuthExpired, onLogoutGuardChange }) {
   const hasAutoSubmittedRef = useRef(false)
   const autoSubmitInProgressRef = useRef(false)
 
+  const currentStudentId = Number(user.id)
+  const currentStudentSubmissions = useMemo(
+    () => submissions.filter((submission) => Number(submission.student_id) === currentStudentId),
+    [currentStudentId, submissions],
+  )
   const selectedCount = Object.values(answers).filter(Boolean).length
   const reviewCount = Object.values(review).filter(Boolean).length
   const totalQuestions = activeExam?.questions?.length ?? 0
   const canSubmit = activeExam && totalQuestions > 0
   const submissionsByExamId = useMemo(() => {
     const map = new Map()
-    submissions.forEach((submission) => {
-      map.set(submission.exam_id, submission)
+    currentStudentSubmissions.forEach((submission) => {
+      map.set(Number(submission.exam_id), submission)
     })
     return map
-  }, [submissions])
+  }, [currentStudentSubmissions])
   const examsById = useMemo(() => {
     const map = new Map()
     exams.forEach((exam) => {
@@ -678,14 +696,16 @@ function StudentDashboard({ token, user, onAuthExpired, onLogoutGuardChange }) {
         apiRequest('/exams/submissions/me', { token }),
       ])
       setExams(examData)
-      setSubmissions(submissionData)
+      setSubmissions(
+        submissionData.filter((submission) => Number(submission.student_id) === currentStudentId),
+      )
     } catch (err) {
       if (handleAuthenticatedError(err, onAuthExpired)) return
       setStatus({ loading: false, error: formatStudentExamError(err.message), success: '' })
       return
     }
     setStatus({ loading: false, error: '', success: '' })
-  }, [onAuthExpired, token])
+  }, [currentStudentId, onAuthExpired, token])
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -893,7 +913,7 @@ function StudentDashboard({ token, user, onAuthExpired, onLogoutGuardChange }) {
         </div>
         <div className="metric-row">
           <Metric label="Available" value={exams.length} />
-          <Metric label="Submissions" value={submissions.length} />
+          <Metric label="Submissions" value={currentStudentSubmissions.length} />
           <Metric label="For review" value={reviewCount} />
         </div>
       </section>
@@ -930,7 +950,7 @@ function StudentDashboard({ token, user, onAuthExpired, onLogoutGuardChange }) {
                 <StudentExamCard
                   exam={exam}
                   key={exam.id}
-                  submission={submissionsByExamId.get(exam.id)}
+                  submission={submissionsByExamId.get(Number(exam.id))}
                   onStart={() => startExam(exam)}
                 />
               ))}
@@ -954,7 +974,7 @@ function StudentDashboard({ token, user, onAuthExpired, onLogoutGuardChange }) {
               </div>
             ) : null}
             <div className="submission-list">
-              {submissions.map((submission) => (
+              {currentStudentSubmissions.map((submission) => (
                 <div className="submission-item" key={submission.id}>
                   <div>
                     <span>{examsById.get(submission.exam_id)?.title ?? `Exam #${submission.exam_id}`}</span>
@@ -971,7 +991,7 @@ function StudentDashboard({ token, user, onAuthExpired, onLogoutGuardChange }) {
                   </strong>
                 </div>
               ))}
-              {submissions.length === 0 ? (
+              {currentStudentSubmissions.length === 0 ? (
                 <p className="empty-state">Submitted exams will appear here.</p>
               ) : null}
             </div>
@@ -983,7 +1003,9 @@ function StudentDashboard({ token, user, onAuthExpired, onLogoutGuardChange }) {
 }
 
 function StudentExamCard({ exam, submission, onStart }) {
+  const hasSubmission = Boolean(submission)
   const isCompleted = submission?.status === 'submitted'
+  const isLocked = submission?.status === 'in_progress'
   const resultStatus = submission?.is_result_published ? 'Results published' : 'Results pending'
 
   return (
@@ -996,13 +1018,16 @@ function StudentExamCard({ exam, submission, onStart }) {
         <span>{exam.duration_minutes} min</span>
         <span>{exam.questions.length} questions</span>
         {isCompleted ? <span>Completed</span> : null}
-        {isCompleted ? <span>{resultStatus}</span> : null}
+        {isLocked ? <span>Attempt locked</span> : null}
+        {hasSubmission ? <span>{resultStatus}</span> : null}
       </div>
-      {isCompleted ? (
+      {hasSubmission ? (
         <p className="empty-state">
-          {submission.is_result_published
-            ? 'Results published. Check your recent submissions for your score.'
-            : 'You have already completed this exam. Results are not published yet.'}
+          {isLocked
+            ? 'This exam attempt was already started. Re-entry is locked by the backend.'
+            : submission.is_result_published
+              ? 'Results published. Check your recent submissions for your score.'
+              : 'You have already completed this exam. Results are not published yet.'}
         </p>
       ) : (
         <>
@@ -1392,6 +1417,13 @@ function AdminDashboard({ token, onAuthExpired }) {
   const [resultStudentSearch, setResultStudentSearch] = useState('')
   const [resultStatusFilter, setResultStatusFilter] = useState('all')
   const [resultPublishFilter, setResultPublishFilter] = useState('all')
+  const [resultExportExamId, setResultExportExamId] = useState('')
+  const [submissionDetailState, setSubmissionDetailState] = useState({
+    isOpen: false,
+    loading: false,
+    error: '',
+    submission: null,
+  })
   const isPersistingDraftRef = useRef(false)
 
   const dashboardSummary = useMemo(() => {
@@ -1888,69 +1920,163 @@ function AdminDashboard({ token, onAuthExpired }) {
     return exam?.questions?.reduce((total, question) => total + Number(question.marks || 0), 0) ?? 0
   }
 
-  function exportFilteredResults() {
-    const rows = filteredResultSubmissions.map((submission) => {
-      const exam = examById.get(submission.exam_id)
-      const totalMarks = getTotalMarks(exam)
-      return {
-        exam_title: exam?.title ?? `Exam ${submission.exam_id}`,
-        student_name: submission.student_full_name,
-        register_number: submission.student_register_number ?? '',
-        department: submission.student_department ?? '',
-        section: submission.student_class_name ?? submission.student_batch ?? '',
-        score: submission.score ?? '',
-        total_marks: totalMarks,
-        submission_status: submission.status,
-        submitted_time: submission.submitted_at ?? '',
-        result_published_status: exam?.is_result_published ? 'Results Published' : 'Results Not Published',
-      }
-    })
+  function getAnswerMaxMarks(submission, answer) {
+    const exam = examById.get(submission.exam_id)
+    const question = exam?.questions?.find((item) => item.id === answer.question_id)
+    return Number(question?.marks ?? 0)
+  }
 
-    if (!downloadCsv('filtered-results.csv', [
+  function getStudentSection(submission) {
+    return submission.student_class_name ?? submission.student_batch ?? ''
+  }
+
+  async function openSubmissionDetail(submissionId) {
+    setSubmissionDetailState({
+      isOpen: true,
+      loading: true,
+      error: '',
+      submission: null,
+    })
+    try {
+      const detail = await apiRequest(`/exams/submissions/${submissionId}`, { token })
+      setSubmissionDetailState({
+        isOpen: true,
+        loading: false,
+        error: '',
+        submission: detail,
+      })
+    } catch (err) {
+      if (handleAuthenticatedError(err, onAuthExpired)) return
+      setSubmissionDetailState({
+        isOpen: true,
+        loading: false,
+        error: err.message,
+        submission: null,
+      })
+    }
+  }
+
+  function closeSubmissionDetail() {
+    setSubmissionDetailState({
+      isOpen: false,
+      loading: false,
+      error: '',
+      submission: null,
+    })
+  }
+
+  function exportExamMarksCsv() {
+    const examId = Number(resultExportExamId)
+    const exam = examById.get(examId)
+    if (!exam) {
+      setStatus({ loading: false, error: 'Select an exam before downloading marks.', success: '' })
+      return
+    }
+
+    const totalMarks = getTotalMarks(exam)
+    const rows = submissions
+      .filter((submission) => Number(submission.exam_id) === examId)
+      .map((submission) => {
+        const hasScore = submission.score !== null && submission.score !== undefined
+        const score = hasScore ? Number(submission.score) : null
+        const isSubmitted = submission.status === 'submitted'
+        return {
+          exam_title: exam.title,
+          student_name: submission.student_full_name,
+          email: submission.student_email,
+          register_number: submission.student_register_number ?? '',
+          department: submission.student_department ?? '',
+          section: getStudentSection(submission),
+          score: hasScore ? score : '',
+          total_marks: totalMarks,
+          percentage: hasScore && totalMarks ? ((score / totalMarks) * 100).toFixed(2) : '',
+          status: isSubmitted && hasScore ? (score >= 50 ? 'Pass' : 'Fail') : 'In Progress',
+          submitted_at: submission.submitted_at ?? '',
+        }
+      })
+
+    if (!downloadCsv(`${sanitizeCsvFilename(exam.title)}-marks.csv`, [
       'exam_title',
       'student_name',
+      'email',
       'register_number',
       'department',
       'section',
       'score',
       'total_marks',
-      'submission_status',
-      'submitted_time',
-      'result_published_status',
+      'percentage',
+      'status',
+      'submitted_at',
     ], rows)) {
-      setStatus({ loading: false, error: 'No submissions match your search.', success: '' })
+      setStatus({ loading: false, error: 'No submissions are available for the selected exam.', success: '' })
       return
     }
-    setStatus({ loading: false, error: '', success: 'Filtered results exported.' })
+    setStatus({ loading: false, error: '', success: 'Exam marks CSV downloaded.' })
   }
 
-  function exportSubmissionDetails(submission) {
+  function exportStudentPerformanceCsv(submission) {
     const exam = examById.get(submission.exam_id)
-    const rows = submission.answers.map((answer, index) => ({
-      exam_title: exam?.title ?? `Exam ${submission.exam_id}`,
-      student_name: submission.student_full_name,
-      register_number: submission.student_register_number ?? '',
-      question_number: index + 1,
-      question_text: answer.question_prompt,
-      selected_answer: answer.selected_option_text ?? '',
-      correct_answer: answer.correct_option_text ?? '',
-      marks_awarded: answer.marks_awarded,
-    }))
+    const totalMarks = getTotalMarks(exam)
+    const submissionAnswers = submission.answers ?? []
+    const totalScore = submission.score ?? submissionAnswers.reduce(
+      (total, answer) => total + Number(answer.marks_awarded || 0),
+      0,
+    )
+    const rows = [
+      ...submissionAnswers.map((answer, index) => ({
+        exam_title: exam?.title ?? `Exam ${submission.exam_id}`,
+        student_name: submission.student_full_name,
+        email: submission.student_email,
+        register_number: submission.student_register_number ?? '',
+        department: submission.student_department ?? '',
+        section: getStudentSection(submission),
+        submitted_at: submission.submitted_at ?? '',
+        question_no: index + 1,
+        question: answer.question_prompt,
+        student_answer: answer.selected_option_text ?? '',
+        correct_answer: answer.correct_option_text ?? '',
+        marks_awarded: answer.marks_awarded,
+        max_marks: getAnswerMaxMarks(submission, answer),
+        status: getSubmissionAnswerStatus(answer),
+      })),
+      {
+        exam_title: 'TOTAL',
+        student_name: '',
+        email: '',
+        register_number: '',
+        department: '',
+        section: '',
+        submitted_at: '',
+        question_no: '',
+        question: '',
+        student_answer: '',
+        correct_answer: '',
+        marks_awarded: totalScore,
+        max_marks: totalMarks,
+        status: '',
+      },
+    ]
 
-    if (!downloadCsv('student-detailed-response.csv', [
+    if (!downloadCsv(`${sanitizeCsvFilename(submission.student_full_name)}-performance.csv`, [
       'exam_title',
       'student_name',
+      'email',
       'register_number',
-      'question_number',
-      'question_text',
-      'selected_answer',
+      'department',
+      'section',
+      'submitted_at',
+      'question_no',
+      'question',
+      'student_answer',
       'correct_answer',
       'marks_awarded',
+      'max_marks',
+      'status',
     ], rows)) {
-      setStatus({ loading: false, error: 'No detailed responses exist for this submission.', success: '' })
+      setStatus({ loading: false, error: 'No performance rows are available for this submission.', success: '' })
       return
     }
-    setStatus({ loading: false, error: '', success: 'Detailed response exported.' })
+    setStatus({ loading: false, error: '', success: 'Student performance CSV downloaded.' })
   }
 
   return (
@@ -2288,15 +2414,29 @@ function AdminDashboard({ token, onAuthExpired }) {
         <section className="details-band results-workspace">
           <div className="panel-title-row">
             <SectionTitle icon={Flag} eyebrow="Results" title="Submission results" />
-            <button
-              className="primary-button"
-              type="button"
-              onClick={exportFilteredResults}
-              disabled={filteredResultSubmissions.length === 0}
-            >
-              <Download size={16} aria-hidden="true" />
-              Export Filtered CSV
-            </button>
+            <div className="table-actions">
+              <select
+                value={resultExportExamId}
+                onChange={(event) => setResultExportExamId(event.target.value)}
+                aria-label="Exam for marks CSV"
+              >
+                <option value="">Select exam for marks CSV</option>
+                {exams.map((exam) => (
+                  <option value={exam.id} key={exam.id}>
+                    {exam.title}
+                  </option>
+                ))}
+              </select>
+              <button
+                className="primary-button"
+                type="button"
+                onClick={exportExamMarksCsv}
+                disabled={!resultExportExamId}
+              >
+                <Download size={16} aria-hidden="true" />
+                Download Exam Marks CSV
+              </button>
+            </div>
           </div>
 
           <div className="results-filter-bar">
@@ -2376,11 +2516,7 @@ function AdminDashboard({ token, onAuthExpired }) {
                           <button
                             className="secondary-button"
                             type="button"
-                            onClick={() => {
-                              if (exam) {
-                                void selectExam(exam.id)
-                              }
-                            }}
+                            onClick={() => openSubmissionDetail(submission.id)}
                           >
                             <Eye size={16} aria-hidden="true" />
                             View
@@ -2388,10 +2524,10 @@ function AdminDashboard({ token, onAuthExpired }) {
                           <button
                             className="secondary-button"
                             type="button"
-                            onClick={() => exportSubmissionDetails(submission)}
+                            onClick={() => exportStudentPerformanceCsv(submission)}
                           >
                             <Download size={16} aria-hidden="true" />
-                            Details
+                            Performance
                           </button>
                         </div>
                       </td>
@@ -2408,6 +2544,17 @@ function AdminDashboard({ token, onAuthExpired }) {
 
           <SubmissionReviewPanel submissions={filteredResultSubmissions} />
         </section>
+      ) : null}
+
+      {submissionDetailState.isOpen ? (
+        <SubmissionDetailModal
+          detailState={submissionDetailState}
+          exam={submissionDetailState.submission ? examById.get(submissionDetailState.submission.exam_id) : null}
+          getAnswerMaxMarks={getAnswerMaxMarks}
+          getStudentSection={getStudentSection}
+          onClose={closeSubmissionDetail}
+          onDownload={exportStudentPerformanceCsv}
+        />
       ) : null}
 
       {deleteExamCandidate ? (
@@ -2470,6 +2617,111 @@ function AdminExamDetails({ exam }) {
         {exam.questions.length === 0 ? <p className="empty-state">No questions yet.</p> : null}
       </div>
     </section>
+  )
+}
+
+function SubmissionDetailModal({
+  detailState,
+  exam,
+  getAnswerMaxMarks,
+  getStudentSection,
+  onClose,
+  onDownload,
+}) {
+  const submission = detailState.submission
+  const totalMarks = exam?.questions?.reduce((total, question) => total + Number(question.marks || 0), 0) ?? 0
+
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <div className="modal-panel submission-detail-modal" role="dialog" aria-modal="true" aria-labelledby="submission-detail-title">
+        <button
+          className="icon-button modal-close"
+          type="button"
+          onClick={onClose}
+          aria-label="Close submission details"
+        >
+          <X size={18} aria-hidden="true" />
+        </button>
+
+        <SectionTitle icon={Eye} eyebrow="Submission" title="Student performance" />
+
+        {detailState.loading ? <LoadingBlock label="Loading submission details" /> : null}
+        {detailState.error ? <p className="notice error">{detailState.error}</p> : null}
+
+        {!detailState.loading && !detailState.error && submission ? (
+          <>
+            <div className="submission-detail-grid">
+              <div>
+                <span>Student name</span>
+                <strong>{submission.student_full_name}</strong>
+              </div>
+              <div>
+                <span>Email</span>
+                <strong>{submission.student_email}</strong>
+              </div>
+              <div>
+                <span>Register number</span>
+                <strong>{submission.student_register_number ?? '-'}</strong>
+              </div>
+              <div>
+                <span>Department</span>
+                <strong>{submission.student_department ?? '-'}</strong>
+              </div>
+              <div>
+                <span>Section</span>
+                <strong>{getStudentSection(submission) || '-'}</strong>
+              </div>
+              <div>
+                <span>Exam title</span>
+                <strong>{exam?.title ?? `Exam ${submission.exam_id}`}</strong>
+              </div>
+              <div>
+                <span>Submission status</span>
+                <strong>{submission.status === 'submitted' ? 'Submitted' : 'In Progress'}</strong>
+              </div>
+              <div>
+                <span>Submitted time</span>
+                <strong>{formatDateTime(submission.submitted_at)}</strong>
+              </div>
+              <div>
+                <span>Total score</span>
+                <strong>{submission.score ?? '-'} / {totalMarks}</strong>
+              </div>
+            </div>
+
+            <div className="panel-title-row">
+              <h3 id="submission-detail-title">Question-wise answers</h3>
+              <button className="secondary-button" type="button" onClick={() => onDownload(submission)}>
+                <Download size={16} aria-hidden="true" />
+                Download Student Performance
+              </button>
+            </div>
+
+            <div className="answer-review-grid">
+              {(submission.answers ?? []).map((answer, index) => {
+                const statusLabel = getSubmissionAnswerStatus(answer)
+                return (
+                  <div
+                    className={`answer-review-item ${statusLabel === 'Correct' ? 'correct' : 'wrong'}`}
+                    key={answer.id}
+                  >
+                    <strong>{index + 1}. {answer.question_prompt}</strong>
+                    <span>Student answer: {answer.selected_option_text ?? 'Unanswered'}</span>
+                    <span>Correct answer: {answer.correct_option_text ?? 'Not set'}</span>
+                    <span>Marks awarded: {answer.marks_awarded} / {getAnswerMaxMarks(submission, answer)}</span>
+                    <span>Status: {statusLabel}</span>
+                    {answer.is_marked_for_review ? <span className="review-note">Marked for review</span> : null}
+                  </div>
+                )
+              })}
+              {(submission.answers ?? []).length === 0 ? (
+                <p className="empty-state">No question-wise answers were saved for this submission.</p>
+              ) : null}
+            </div>
+          </>
+        ) : null}
+      </div>
+    </div>
   )
 }
 

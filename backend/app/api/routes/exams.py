@@ -29,6 +29,7 @@ from app.services.exam_service import (
     delete_exam,
     delete_question,
     force_submit_exam,
+    get_submission,
     get_exam,
     import_questions_from_docx,
     list_exam_submissions,
@@ -134,6 +135,18 @@ def read_my_submissions(
     current_user: User = Depends(require_student),
 ):
     return [_student_submission_response(submission) for submission in list_my_submissions(db, current_user)]
+
+
+@router.get("/submissions/{submission_id}", response_model=SubmissionRead)
+def read_submission_detail(
+    submission_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    try:
+        return get_submission(db, submission_id, current_user)
+    except LookupError as exc:
+        _raise_not_found(exc)
 
 
 @router.get("/{exam_id}", response_model=ExamRead)
