@@ -138,12 +138,25 @@ function mapSubmissionAnswers(submission) {
   const answers = {}
   const review = {}
   for (const answer of submission?.answers ?? []) {
-    if (answer.selected_option_id) {
+    if (hasSelectedAnswer(answer.selected_option_id)) {
       answers[answer.question_id] = answer.selected_option_id
     }
     review[answer.question_id] = answer.is_marked_for_review
   }
   return { answers, review }
+}
+
+function hasSelectedAnswer(value) {
+  return value !== undefined && value !== null
+}
+
+function buildSelectedAnswerPayload(answers) {
+  return Object.entries(answers)
+    .filter(([, optionId]) => hasSelectedAnswer(optionId))
+    .map(([questionId, optionId]) => ({
+      question_id: Number(questionId),
+      selected_option_id: optionId,
+    }))
 }
 
 function formatStudentExamError(message) {
@@ -661,7 +674,7 @@ function StudentDashboard({ token, user, onAuthExpired, onLogoutGuardChange }) {
     () => submissions.filter((submission) => Number(submission.student_id) === currentStudentId),
     [currentStudentId, submissions],
   )
-  const selectedCount = Object.values(answers).filter(Boolean).length
+  const selectedCount = Object.values(answers).filter(hasSelectedAnswer).length
   const reviewCount = Object.values(review).filter(Boolean).length
   const totalQuestions = activeExam?.questions?.length ?? 0
   const canSubmit = activeExam && totalQuestions > 0
@@ -740,10 +753,7 @@ function StudentDashboard({ token, user, onAuthExpired, onLogoutGuardChange }) {
 
       const requestBody = {
         reason,
-        answers: Object.entries(answersRef.current).map(([questionId, optionId]) => ({
-          question_id: Number(questionId),
-          selected_option_id: optionId,
-        })),
+        answers: buildSelectedAnswerPayload(answersRef.current),
       }
 
       try {
@@ -820,10 +830,20 @@ function StudentDashboard({ token, user, onAuthExpired, onLogoutGuardChange }) {
           is_marked_for_review: shouldReview,
         },
       })
-      const mapped = mapSubmissionAnswers(submission)
       setActiveSubmission(submission)
-      setAnswers(mapped.answers)
-      setReview(mapped.review)
+      setAnswers((current) => {
+        const nextAnswers = { ...current }
+        if (hasSelectedAnswer(optionId)) {
+          nextAnswers[questionId] = optionId
+        } else {
+          delete nextAnswers[questionId]
+        }
+        return nextAnswers
+      })
+      setReview((current) => ({
+        ...current,
+        [questionId]: Boolean(shouldReview),
+      }))
       setStatus({ loading: false, error: '', success: 'Answer saved.' })
       return true
     } catch (err) {
@@ -872,10 +892,7 @@ function StudentDashboard({ token, user, onAuthExpired, onLogoutGuardChange }) {
         method: 'POST',
         token,
         body: {
-          answers: Object.entries(answers).map(([questionId, optionId]) => ({
-            question_id: Number(questionId),
-            selected_option_id: optionId,
-          })),
+          answers: buildSelectedAnswerPayload(answers),
         },
       })
       hasAutoSubmittedRef.current = true
@@ -1191,7 +1208,7 @@ function ExamAttempt({
   }, [onAutoSubmit, onProctorEvent])
 
   function getQuestionStatus(question) {
-    const isAnswered = Boolean(answers[question.id])
+    const isAnswered = hasSelectedAnswer(answers[question.id])
     const isMarked = Boolean(review[question.id])
     const isVisited = Boolean(visited[question.id])
 
@@ -1200,6 +1217,14 @@ function ExamAttempt({
     if (isAnswered) return 'answered'
     if (isVisited) return 'not-answered'
     return 'not-visited'
+  }
+
+  function selectCurrentAnswer(optionId) {
+    if (!currentQuestion) return
+    setVisited((current) =>
+      current[currentQuestion.id] ? current : { ...current, [currentQuestion.id]: true },
+    )
+    setAnswers((current) => ({ ...current, [currentQuestion.id]: optionId }))
   }
 
   function goToQuestion(index) {
@@ -1292,9 +1317,7 @@ function ExamAttempt({
                     type="radio"
                     name={`current-question-${currentQuestion.id}`}
                     checked={answers[currentQuestion.id] === option.id}
-                    onChange={() =>
-                      setAnswers((current) => ({ ...current, [currentQuestion.id]: option.id }))
-                    }
+                    onChange={() => selectCurrentAnswer(option.id)}
                   />
                   <span>{option.text}</span>
                 </label>
