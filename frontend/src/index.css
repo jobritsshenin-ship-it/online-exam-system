@@ -2577,6 +2577,236 @@ select:focus {
   }
 }
 
+@media (max-width: 640px) {
+  .admin-grid .forms-column,
+  .exam-builder-module,
+  .exam-builder-module > *,
+  .builder-block,
+  .builder-block > *,
+  .builder-workspace,
+  .question-editor,
+  .question-editor > *,
+  .question-navigator,
+  .csv-preview,
+  .csv-errors,
+  .csv-row-preview,
+  .word-import-row,
+  .details-band,
+  .question-stack,
+  .question-panel,
+  .option-grid,
+  .option-row {
+    max-width: 100%;
+    min-width: 0;
+  }
+
+  .exam-builder-module,
+  .builder-block,
+  .question-editor,
+  .question-panel {
+    overflow-wrap: anywhere;
+  }
+
+  .exam-builder-module label,
+  .builder-block label,
+  .question-editor label,
+  .csv-format,
+  .import-rules,
+  .import-rules li,
+  .notice,
+  .empty-state,
+  .option-row span,
+  .review-note {
+    max-width: 100%;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .exam-builder-module input:not([type="checkbox"]),
+  .exam-builder-module select,
+  .exam-builder-module textarea,
+  .question-editor input,
+  .question-editor select,
+  .question-editor textarea {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+  }
+
+  .builder-topbar,
+  .generation-row,
+  .builder-actions,
+  .template-actions,
+  .word-import-row,
+  .question-editor .answer-actions,
+  .csv-preview-header {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+  }
+
+  .generation-row,
+  .word-import-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .builder-actions,
+  .template-actions,
+  .question-editor .answer-actions,
+  .csv-preview-header {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    justify-items: stretch;
+  }
+
+  .generation-row > *,
+  .builder-actions > *,
+  .template-actions > *,
+  .word-import-row > *,
+  .question-editor .answer-actions > *,
+  .csv-preview .primary-button {
+    width: 100%;
+    min-width: 0;
+    justify-self: stretch;
+  }
+
+  .exam-builder-module .primary-button,
+  .exam-builder-module .secondary-button,
+  .question-editor .primary-button,
+  .question-editor .secondary-button {
+    max-width: 100%;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .builder-toggle {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .builder-toggle input {
+    flex: 0 0 auto;
+  }
+
+  .csv-format {
+    display: grid;
+    gap: 6px;
+    white-space: normal;
+  }
+
+  .csv-format code {
+    display: block;
+    width: 100%;
+    max-width: 100%;
+    overflow-x: auto;
+    overflow-y: hidden;
+    white-space: pre;
+    word-break: normal;
+    overflow-wrap: normal;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .word-import-row input[type="file"] {
+    display: block;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .word-import-row input[type="file"]::file-selector-button {
+    max-width: 100%;
+    margin-right: 8px;
+  }
+
+  .question-editor > .panel-title-row {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+  }
+
+  .question-editor .answer-actions {
+    justify-content: stretch;
+    margin-top: 12px;
+  }
+
+  .navigator-list {
+    grid-template-columns: repeat(auto-fit, minmax(36px, 42px));
+  }
+
+  .option-row {
+    align-items: flex-start;
+  }
+
+  .option-row.read-only {
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 480px) {
+  .exam-builder-module,
+  .builder-block,
+  .question-editor,
+  .question-panel {
+    padding: 12px;
+  }
+
+  .exam-builder-module {
+    gap: 14px;
+  }
+
+  .builder-block,
+  .question-editor {
+    gap: 12px;
+  }
+
+  .builder-topbar {
+    align-items: stretch;
+  }
+
+  .builder-topbar .exam-meta {
+    width: 100%;
+  }
+
+  .builder-topbar .exam-meta span {
+    flex: 1 1 96px;
+    text-align: center;
+  }
+
+  .exam-builder-module .primary-button,
+  .exam-builder-module .secondary-button,
+  .question-editor .secondary-button {
+    width: 100%;
+    min-height: 46px;
+    padding-inline: 12px;
+  }
+
+  .csv-dropzone {
+    min-height: 132px;
+    padding: 14px;
+  }
+
+  .csv-format code {
+    font-size: 0.78rem;
+  }
+
+  .word-import-row input[type="file"] {
+    font-size: 0.82rem;
+  }
+
+  .question-editor > .panel-title-row {
+    gap: 12px;
+    padding-bottom: 12px;
+  }
+
+  .option-row {
+    min-height: 44px;
+    padding: 10px;
+  }
+}
+
 @media (max-width: 360px) {
   .auth-tabs,
   .login-role-switch,
