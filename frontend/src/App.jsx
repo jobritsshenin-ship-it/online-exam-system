@@ -32,19 +32,25 @@ import './index.css'
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000/api/v1'
 const AUTH_STORAGE_KEY = 'exam_portal_auth'
 const STUDENT_EMAIL_DOMAIN = '@stellamaryscoe.edu.in'
+const COLLEGE_NAME = "Stella Mary's College of Engineering"
+const PORTAL_TITLE = 'Skill Enhancement Exam Portal'
 const SYSTEM_EXAM_WARNING = 'Do not switch tabs, minimize, exit fullscreen, refresh, close, or leave the exam screen. Doing so will automatically submit your exam.'
 const DEFAULT_EXAM_INSTRUCTIONS = 'Read the exam instructions carefully before starting. Answer every question, save your responses as you move through the exam, and submit before the timer ends.'
 
-const demoAccounts = {
-  student: {
-    email: 'student@example.com',
-    password: 'Student@123',
-  },
-  admin: {
-    email: 'admin@example.com',
-    password: 'Admin@123',
-  },
-}
+const createEmptyCredentials = () => ({
+  email: '',
+  password: '',
+})
+
+const createEmptySignup = () => ({
+  full_name: '',
+  institutional_email: '',
+  register_number: '',
+  department: '',
+  section: '',
+  password: '',
+  confirmPassword: '',
+})
 
 function formatApiErrorDetail(detail) {
   if (typeof detail === 'string') {
@@ -340,20 +346,13 @@ function App() {
 function LoginScreen({ onAuthenticated }) {
   const [mode, setMode] = useState('signin')
   const [signInRole, setSignInRole] = useState('student')
-  const [credentials, setCredentials] = useState(demoAccounts.student)
-  const [signup, setSignup] = useState({
-    full_name: '',
-    institutional_email: '',
-    register_number: '',
-    department: '',
-    section: '',
-    password: '',
-    confirmPassword: '',
-  })
+  const [credentials, setCredentials] = useState(createEmptyCredentials)
+  const [signup, setSignup] = useState(createEmptySignup)
   const [isLoading, setIsLoading] = useState(false)
   const [isRegistering, setIsRegistering] = useState(false)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
+  const [isLogoVisible, setIsLogoVisible] = useState(true)
 
   async function handleLoginSubmit(event) {
     event.preventDefault()
@@ -383,7 +382,7 @@ function LoginScreen({ onAuthenticated }) {
     if (!fullName) return 'Full name is required.'
     if (!institutionalEmail) return 'Institutional email is required.'
     if (!institutionalEmail.endsWith(STUDENT_EMAIL_DOMAIN)) {
-      return 'Use your official Stella Mary’s institutional email address.'
+      return "Use your official Stella Mary's institutional email address."
     }
     if (!registerNumber) return 'Register number is required.'
     if (!department) return 'Department is required.'
@@ -423,16 +422,8 @@ function LoginScreen({ onAuthenticated }) {
         },
       })
       setSignInRole('student')
-      setCredentials({ email: signup.institutional_email.trim().toLowerCase(), password: '' })
-      setSignup({
-        full_name: '',
-        institutional_email: '',
-        register_number: '',
-        department: '',
-        section: '',
-        password: '',
-        confirmPassword: '',
-      })
+      setCredentials(createEmptyCredentials())
+      setSignup(createEmptySignup())
       setMode('signin')
       setSuccess('Account created successfully. Please sign in.')
     } catch (err) {
@@ -444,32 +435,32 @@ function LoginScreen({ onAuthenticated }) {
 
   function selectSignInRole(role) {
     setSignInRole(role)
-    setCredentials(demoAccounts[role])
     setError('')
     setSuccess('')
     setMode('signin')
   }
 
   return (
-    <main className="login-layout">
-      <section className="brand-panel" aria-label="Online examination portal">
-        <div className="brand-mark">
-          <BookOpenCheck size={34} aria-hidden="true" />
+    <main className="auth-page">
+      <section className="login-card auth-card" aria-label="Authentication">
+        <div className="auth-brand">
+          <div className="auth-logo-frame" aria-hidden="true">
+            {isLogoVisible ? (
+              <img
+                src="/branding/stella-marys-logo.png"
+                alt=""
+                onError={() => setIsLogoVisible(false)}
+              />
+            ) : (
+              <BookOpenCheck size={38} aria-hidden="true" />
+            )}
+          </div>
+          <p className="eyebrow">{COLLEGE_NAME}</p>
+          <h1>{PORTAL_TITLE}</h1>
+          <p>Secure online examination portal for students and administrators.</p>
         </div>
-        <p className="eyebrow">Online Examination System</p>
-        <h1>Exam control room</h1>
-        <p className="brand-copy">
-          Secure sign-in for students and administrators, with live access to published exams.
-        </p>
-        <div className="signal-strip">
-          <span>JWT auth</span>
-          <span>PostgreSQL</span>
-          <span>Redis ready</span>
-        </div>
-      </section>
 
-      <section className="login-card" aria-label="Authentication">
-        <div className="section-heading compact">
+        <div className="section-heading compact auth-form-heading">
           {mode === 'signin' ? (
             <ShieldCheck size={22} aria-hidden="true" />
           ) : (
@@ -538,6 +529,7 @@ function LoginScreen({ onAuthenticated }) {
                     setCredentials((current) => ({ ...current, email: event.target.value }))
                   }
                   autoComplete="email"
+                  placeholder="Enter your email"
                   required
                 />
               </label>
@@ -550,6 +542,7 @@ function LoginScreen({ onAuthenticated }) {
                     setCredentials((current) => ({ ...current, password: event.target.value }))
                   }
                   autoComplete="current-password"
+                  placeholder="Enter your password"
                   required
                 />
               </label>
@@ -571,6 +564,7 @@ function LoginScreen({ onAuthenticated }) {
                   setSignup((current) => ({ ...current, full_name: event.target.value }))
                 }
                 autoComplete="name"
+                placeholder="Enter your full name"
                 required
               />
             </label>
@@ -597,6 +591,7 @@ function LoginScreen({ onAuthenticated }) {
                     setSignup((current) => ({ ...current, password: event.target.value }))
                   }
                   autoComplete="new-password"
+                  placeholder="Create a password"
                   required
                 />
               </label>
@@ -609,6 +604,7 @@ function LoginScreen({ onAuthenticated }) {
                     setSignup((current) => ({ ...current, confirmPassword: event.target.value }))
                   }
                   autoComplete="new-password"
+                  placeholder="Confirm your password"
                   required
                 />
               </label>
@@ -621,6 +617,7 @@ function LoginScreen({ onAuthenticated }) {
                   onChange={(event) =>
                     setSignup((current) => ({ ...current, register_number: event.target.value }))
                   }
+                  placeholder="Enter register number"
                   required
                 />
               </label>
@@ -631,6 +628,7 @@ function LoginScreen({ onAuthenticated }) {
                   onChange={(event) =>
                     setSignup((current) => ({ ...current, department: event.target.value }))
                   }
+                  placeholder="Enter department"
                   required
                 />
               </label>
@@ -642,6 +640,7 @@ function LoginScreen({ onAuthenticated }) {
                 onChange={(event) =>
                   setSignup((current) => ({ ...current, section: event.target.value }))
                 }
+                placeholder="Enter section"
                 required
               />
             </label>
@@ -653,6 +652,10 @@ function LoginScreen({ onAuthenticated }) {
           </form>
         )}
       </section>
+      <footer className="auth-footer">
+        <span>&copy; Stella Mary's College of Engineering &mdash; Skill Enhancement Exam Portal</span>
+        <small>For authorized students and administrators only.</small>
+      </footer>
     </main>
   )
 }

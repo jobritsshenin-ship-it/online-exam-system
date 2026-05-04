@@ -68,60 +68,117 @@ h3 {
   line-height: 1.28;
 }
 
-.login-layout {
+.auth-page {
+  position: relative;
   min-height: 100vh;
-  display: grid;
-  grid-template-columns: minmax(0, 1.2fr) minmax(360px, 0.8fr);
-  background:
-    linear-gradient(120deg, rgba(15, 118, 110, 0.08), transparent 42%),
-    var(--bg);
-}
-
-.brand-panel {
-  min-height: 100vh;
-  padding: 7vw;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  gap: 22px;
-  background:
-    linear-gradient(rgba(10, 34, 31, 0.62), rgba(10, 34, 31, 0.4)),
-    url("https://images.unsplash.com/photo-1519389950473-47ba0277781c?auto=format&fit=crop&w=1600&q=80");
-  background-size: cover;
-  background-position: center;
-  color: #fff;
-}
-
-.brand-panel .eyebrow,
-.brand-panel .brand-copy {
-  color: rgba(255, 255, 255, 0.86);
-}
-
-.brand-copy {
-  max-width: 620px;
-  font-size: 1.12rem;
-  line-height: 1.7;
-}
-
-.brand-mark {
-  width: 70px;
-  height: 70px;
   display: grid;
   place-items: center;
-  border: 1px solid rgba(255, 255, 255, 0.42);
+  align-content: center;
+  gap: 18px;
+  padding: 36px 18px;
+  overflow-x: hidden;
+  background:
+    linear-gradient(125deg, rgba(7, 28, 45, 0.88), rgba(20, 88, 89, 0.72)),
+    url("/branding/stella-marys-campus.jpg"),
+    linear-gradient(135deg, #071c2d, #17696a 54%, #b88a36);
+  background-position: center;
+  background-size: cover;
+  color: #f8fafc;
+}
+
+.auth-page::before {
+  position: fixed;
+  inset: 0;
+  content: '';
+  background:
+    radial-gradient(circle at top left, rgba(255, 255, 255, 0.2), transparent 30%),
+    rgba(2, 6, 23, 0.18);
+  backdrop-filter: blur(2px);
+  pointer-events: none;
+}
+
+.login-card {
+  position: relative;
+  z-index: 1;
+  align-self: center;
+  width: min(560px, calc(100% - 28px));
+  padding: clamp(24px, 4vw, 42px);
+  border: 1px solid rgba(255, 255, 255, 0.34);
   border-radius: 8px;
-  background: rgba(255, 255, 255, 0.14);
-  backdrop-filter: blur(12px);
+  background: rgba(255, 255, 255, 0.95);
+  box-shadow: 0 26px 80px rgba(2, 6, 23, 0.34);
+  color: var(--ink);
 }
 
-.signal-strip {
-  display: flex;
-  flex-wrap: wrap;
+.auth-card {
+  backdrop-filter: blur(18px);
+}
+
+.auth-brand {
+  display: grid;
+  justify-items: center;
   gap: 10px;
-  margin-top: 16px;
+  text-align: center;
 }
 
-.signal-strip span,
+.auth-logo-frame {
+  width: 92px;
+  height: 92px;
+  display: grid;
+  place-items: center;
+  margin-bottom: 4px;
+  border: 1px solid rgba(15, 118, 110, 0.18);
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.12);
+  color: var(--primary);
+}
+
+.auth-logo-frame img {
+  max-width: 78px;
+  max-height: 78px;
+  object-fit: contain;
+}
+
+.auth-card h1 {
+  max-width: 460px;
+  font-size: clamp(1.75rem, 3.2vw, 2.55rem);
+  line-height: 1.08;
+  color: #082f49;
+}
+
+.auth-brand > p:not(.eyebrow) {
+  max-width: 430px;
+  color: #475569;
+  font-size: 1rem;
+  line-height: 1.58;
+}
+
+.auth-form-heading {
+  margin-top: 28px;
+}
+
+.auth-footer {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  gap: 4px;
+  max-width: 560px;
+  padding: 0 10px;
+  color: rgba(255, 255, 255, 0.86);
+  text-align: center;
+  text-shadow: 0 1px 14px rgba(2, 6, 23, 0.55);
+}
+
+.auth-footer span {
+  font-size: 0.86rem;
+  font-weight: 800;
+}
+
+.auth-footer small {
+  font-size: 0.78rem;
+}
+
 .progress-pill,
 .user-pill {
   display: inline-flex;
@@ -131,23 +188,6 @@ h3 {
   padding: 6px 12px;
   border-radius: 999px;
   white-space: nowrap;
-}
-
-.signal-strip span {
-  color: #fff;
-  border: 1px solid rgba(255, 255, 255, 0.28);
-  background: rgba(255, 255, 255, 0.14);
-}
-
-.login-card {
-  align-self: center;
-  width: min(480px, calc(100% - 40px));
-  margin: 40px auto;
-  padding: 34px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.92);
-  box-shadow: var(--shadow);
 }
 
 .segmented-control {
@@ -209,6 +249,10 @@ h3 {
 .form-grid {
   display: grid;
   gap: 16px;
+}
+
+.auth-card .form-grid {
+  gap: 17px;
 }
 
 .form-grid label {
@@ -288,6 +332,18 @@ select:focus {
 
 .form-success {
   color: var(--success);
+}
+
+.auth-card .form-error,
+.auth-card .form-success {
+  padding: 11px 12px;
+  border-radius: 7px;
+  background: #fff7ed;
+  font-weight: 800;
+}
+
+.auth-card .form-success {
+  background: #ecfdf3;
 }
 
 .notice.success {
@@ -1819,7 +1875,6 @@ select:focus {
 }
 
 @media (max-width: 920px) {
-  .login-layout,
   .content-grid,
   .admin-grid,
   .user-management-grid,
@@ -1834,9 +1889,9 @@ select:focus {
     grid-template-columns: 1fr;
   }
 
-  .brand-panel {
-    min-height: 44vh;
-    padding: 34px 24px;
+  .auth-page {
+    align-content: start;
+    padding: 24px 14px;
   }
 
   .dashboard-hero,
@@ -1877,7 +1932,7 @@ select:focus {
   }
 
   .login-card {
-    width: min(520px, calc(100% - 28px));
+    width: min(560px, 100%);
   }
 
   .form-two-column,
@@ -1895,6 +1950,29 @@ select:focus {
 }
 
 @media (max-width: 560px) {
+  .auth-card {
+    padding: 22px;
+  }
+
+  .auth-logo-frame {
+    width: 78px;
+    height: 78px;
+  }
+
+  .auth-logo-frame img {
+    max-width: 66px;
+    max-height: 66px;
+  }
+
+  .auth-card h1 {
+    font-size: 1.65rem;
+  }
+
+  .auth-tabs,
+  .login-role-switch {
+    grid-template-columns: 1fr;
+  }
+
   .workspace {
     width: min(100% - 20px, 1180px);
     padding-top: 20px;
