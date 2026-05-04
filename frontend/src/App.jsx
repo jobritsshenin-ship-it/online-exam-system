@@ -32,6 +32,8 @@ import './index.css'
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000/api/v1'
 const AUTH_STORAGE_KEY = 'exam_portal_auth'
 const STUDENT_EMAIL_DOMAIN = '@stellamaryscoe.edu.in'
+const SYSTEM_EXAM_WARNING = 'Do not switch tabs, minimize, exit fullscreen, refresh, close, or leave the exam screen. Doing so will automatically submit your exam.'
+const DEFAULT_EXAM_INSTRUCTIONS = 'Read the exam instructions carefully before starting. Answer every question, save your responses as you move through the exam, and submit before the timer ends.'
 
 const demoAccounts = {
   student: {
@@ -198,6 +200,29 @@ function formatDateTime(value) {
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return 'Not available'
   return date.toLocaleString()
+}
+
+function formatActivityAction(value) {
+  return String(value || '')
+    .split('_')
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ')
+}
+
+function formatActivityDetails(value) {
+  if (!value) return '-'
+  try {
+    const parsed = JSON.parse(value)
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return Object.entries(parsed)
+        .map(([key, item]) => `${formatActivityAction(key)}: ${String(item)}`)
+        .join(', ')
+    }
+  } catch {
+    return value
+  }
+  return value
 }
 
 function sanitizeCsvFilename(value) {
@@ -1024,6 +1049,7 @@ function StudentExamCard({ exam, submission, onStart }) {
   const isCompleted = submission?.status === 'submitted'
   const isLocked = submission?.status === 'in_progress'
   const resultStatus = submission?.is_result_published ? 'Results published' : 'Results pending'
+  const examInstructions = exam.instructions?.trim() || DEFAULT_EXAM_INSTRUCTIONS
 
   return (
     <article className="exam-card">
@@ -1048,8 +1074,12 @@ function StudentExamCard({ exam, submission, onStart }) {
         </p>
       ) : (
         <>
+          <div className="exam-instructions">
+            <strong>Exam Instructions</strong>
+            <p>{examInstructions}</p>
+          </div>
           <p className="exam-start-warning">
-            Do not exit fullscreen, switch tabs, minimize, refresh, or leave the exam screen. Doing so will automatically submit your exam.
+            {SYSTEM_EXAM_WARNING}
           </p>
           <button className="primary-button" type="button" onClick={onStart}>
             Start exam
@@ -1277,7 +1307,7 @@ function ExamAttempt({
             <h2>{exam.title}</h2>
             <p>{user.full_name} - {user.email}</p>
             <p className="exam-security-warning">
-              Do not exit fullscreen, switch tabs, minimize, refresh, or leave the exam screen. Doing so will automatically submit your exam.
+              {SYSTEM_EXAM_WARNING}
             </p>
             {fullscreenWarning ? <p className="exam-fullscreen-warning">{fullscreenWarning}</p> : null}
           </div>
@@ -1418,6 +1448,7 @@ function AdminDashboard({ token, onAuthExpired }) {
   const [selectedExam, setSelectedExam] = useState(null)
   const [submissions, setSubmissions] = useState([])
   const [users, setUsers] = useState([])
+  const [activityLogs, setActivityLogs] = useState([])
   const [summary, setSummary] = useState(null)
   const [activeTab, setActiveTab] = useState('exams')
   const [status, setStatus] = useState({ loading: true, error: '', success: '' })
@@ -1441,6 +1472,8 @@ function AdminDashboard({ token, onAuthExpired }) {
   const [resultStatusFilter, setResultStatusFilter] = useState('all')
   const [resultPublishFilter, setResultPublishFilter] = useState('all')
   const [resultExportExamId, setResultExportExamId] = useState('')
+  const [activitySearch, setActivitySearch] = useState('')
+  const [activityActionFilter, setActivityActionFilter] = useState('all')
   const [submissionDetailState, setSubmissionDetailState] = useState({
     isOpen: false,
     loading: false,
@@ -1539,18 +1572,46 @@ function AdminDashboard({ token, onAuthExpired }) {
     })
   }, [roleFilter, userSearch, users])
 
+  const activityActionOptions = useMemo(
+    () => Array.from(new Set(activityLogs.map((log) => log.action))).sort(),
+    [activityLogs],
+  )
+
+  const filteredActivityLogs = useMemo(() => {
+    const search = activitySearch.trim().toLowerCase()
+    return activityLogs.filter((log) => {
+      const searchable = [
+        log.action,
+        log.admin_email,
+        log.entity_type,
+        log.entity_id,
+        formatActivityDetails(log.details),
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase()
+
+      return (
+        (activityActionFilter === 'all' || log.action === activityActionFilter) &&
+        (!search || searchable.includes(search))
+      )
+    })
+  }, [activityActionFilter, activityLogs, activitySearch])
+
   const loadAdminData = useCallback(
     async (examId = null) => {
       setStatus((current) => ({ ...current, loading: true, error: '' }))
       try {
-        const [examData, userData, summaryData] = await Promise.all([
+        const [examData, userData, summaryData, activityData] = await Promise.all([
           apiRequest('/exams', { token }),
           apiRequest('/auth/users', { token }),
           apiRequest('/admin/summary', { token }),
+          apiRequest('/admin/activity?limit=200', { token }),
         ])
         setExams(examData)
         setUsers(userData)
         setSummary(summaryData)
+        setActivityLogs(activityData)
         const submissionSets = await Promise.all(
           examData.map((exam) => apiRequest(`/exams/${exam.id}/submissions`, { token })),
         )
@@ -1611,6 +1672,7 @@ function AdminDashboard({ token, onAuthExpired }) {
         title: draft.metadata.title,
         subject: draft.metadata.subject,
         description: draft.metadata.description,
+        instructions: draft.metadata.instructions,
         duration_minutes: draft.metadata.duration_minutes,
       }
       let examId = draft.examId
@@ -1934,6 +1996,7 @@ function AdminDashboard({ token, onAuthExpired }) {
       })
       setResetState({ userId: null, password: '' })
       setStatus({ loading: false, error: '', success: 'Password reset successfully.' })
+      await loadAdminData(selectedExam?.id ?? null)
     } catch (err) {
       showError(err)
     }
@@ -2139,6 +2202,10 @@ function AdminDashboard({ token, onAuthExpired }) {
         <button className={activeTab === 'results' ? 'active' : ''} type="button" onClick={() => setActiveTab('results')}>
           <Flag size={16} aria-hidden="true" />
           Results
+        </button>
+        <button className={activeTab === 'activity' ? 'active' : ''} type="button" onClick={() => setActiveTab('activity')}>
+          <ShieldCheck size={16} aria-hidden="true" />
+          Activity Log
         </button>
       </div>
 
@@ -2569,6 +2636,75 @@ function AdminDashboard({ token, onAuthExpired }) {
         </section>
       ) : null}
 
+      {activeTab === 'activity' ? (
+        <section className="details-band results-workspace">
+          <div className="panel-title-row">
+            <SectionTitle icon={ShieldCheck} eyebrow="Audit" title="Activity Log" />
+            <div className="exam-meta">
+              <span>{activityLogs.length} recorded</span>
+            </div>
+          </div>
+
+          <div className="activity-filter-bar">
+            <label className="search-box">
+              <Search size={16} aria-hidden="true" />
+              <input
+                type="search"
+                placeholder="Search activity"
+                value={activitySearch}
+                onChange={(event) => setActivitySearch(event.target.value)}
+              />
+            </label>
+            <select
+              value={activityActionFilter}
+              onChange={(event) => setActivityActionFilter(event.target.value)}
+              aria-label="Activity action"
+            >
+              <option value="all">All actions</option>
+              {activityActionOptions.map((action) => (
+                <option value={action} key={action}>
+                  {formatActivityAction(action)}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {filteredActivityLogs.length > 0 ? (
+            <div className="results-table-wrap">
+              <table className="results-table activity-table">
+                <thead>
+                  <tr>
+                    <th>Action</th>
+                    <th>Admin</th>
+                    <th>Entity</th>
+                    <th>Details</th>
+                    <th>Time</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredActivityLogs.map((log) => (
+                    <tr key={log.id}>
+                      <td>{formatActivityAction(log.action)}</td>
+                      <td>{log.admin_email ?? 'System'}</td>
+                      <td>
+                        <strong>{log.entity_type ?? '-'}</strong>
+                        <span>{log.entity_id ?? '-'}</span>
+                      </td>
+                      <td>{formatActivityDetails(log.details)}</td>
+                      <td>{formatDateTime(log.created_at)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <p className="empty-state">
+              {activityLogs.length === 0 ? 'No activity recorded yet.' : 'No activity matches your filters.'}
+            </p>
+          )}
+        </section>
+      ) : null}
+
       {submissionDetailState.isOpen ? (
         <SubmissionDetailModal
           detailState={submissionDetailState}
@@ -2618,6 +2754,12 @@ function AdminExamDetails({ exam }) {
         <span>{exam.is_archived ? 'Archived' : exam.is_published ? 'Published' : 'Draft'}</span>
         <span>{exam.is_result_published ? 'Results Published' : 'Results Not Published'}</span>
       </div>
+      {exam.instructions ? (
+        <div className="exam-instructions details-instructions">
+          <strong>Exam Instructions</strong>
+          <p>{exam.instructions}</p>
+        </div>
+      ) : null}
       <div className="question-stack compact-stack">
         {exam.questions.map((question, index) => (
           <article className="question-panel" key={question.id}>

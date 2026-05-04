@@ -11,6 +11,7 @@ class ExamBase(BaseModel):
     title: str = Field(min_length=1, max_length=255)
     subject: str | None = Field(default=None, max_length=255)
     description: str | None = None
+    instructions: str | None = None
     duration_minutes: int = Field(ge=1)
     starts_at: datetime | None = None
     ends_at: datetime | None = None
@@ -27,6 +28,7 @@ class ExamUpdate(BaseModel):
     title: str | None = Field(default=None, min_length=1, max_length=255)
     subject: str | None = Field(default=None, max_length=255)
     description: str | None = None
+    instructions: str | None = None
     duration_minutes: int | None = Field(default=None, ge=1)
     starts_at: datetime | None = None
     ends_at: datetime | None = None

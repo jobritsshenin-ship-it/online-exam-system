@@ -9,6 +9,7 @@ const emptyMetadata = {
   title: '',
   subject: '',
   description: '',
+  instructions: '',
   duration_minutes: 30,
   is_published: false,
 }
@@ -147,6 +148,7 @@ export function ExamBuilder({
       title: selectedExam.title,
       subject: selectedExam.subject ?? '',
       description: selectedExam.description ?? '',
+      instructions: selectedExam.instructions ?? '',
       duration_minutes: selectedExam.duration_minutes,
       is_published: selectedExam.is_published,
     })
@@ -271,6 +273,7 @@ export function ExamBuilder({
         title: metadata.title.trim(),
         subject: metadata.subject.trim() || null,
         description: metadata.description.trim() || null,
+        instructions: metadata.instructions.trim() || null,
         duration_minutes: Number(metadata.duration_minutes),
       },
       questions: completeQuestions,
@@ -317,6 +320,15 @@ export function ExamBuilder({
             rows="3"
             value={metadata.description}
             onChange={(event) => updateMetadata('description', event.target.value)}
+          />
+        </label>
+        <label>
+          Exam Instructions
+          <textarea
+            rows="4"
+            placeholder="Enter instructions students must read before starting this exam..."
+            value={metadata.instructions}
+            onChange={(event) => updateMetadata('instructions', event.target.value)}
           />
         </label>
         <div className="builder-three-column">

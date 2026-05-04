@@ -22,6 +22,7 @@ from app.schemas.exam import (
     SubmissionRead,
     StudentSubmissionRead,
 )
+from app.services.admin_activity_service import log_admin_activity
 from app.services.exam_service import (
     add_question,
     add_questions_bulk,
@@ -112,7 +113,16 @@ def create_new_exam(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_admin),
 ):
-    return create_exam(db, payload, current_user)
+    exam = create_exam(db, payload, current_user)
+    log_admin_activity(
+        db,
+        current_user,
+        "exam_created",
+        entity_type="exam",
+        entity_id=exam.id,
+        details={"title": exam.title},
+    )
+    return exam
 
 
 @router.patch("/{exam_id}", response_model=ExamAdminRead)
@@ -123,7 +133,16 @@ def update_existing_exam(
     current_user: User = Depends(require_admin),
 ):
     try:
-        return update_exam(db, exam_id, payload, current_user)
+        exam = update_exam(db, exam_id, payload, current_user)
+        log_admin_activity(
+            db,
+            current_user,
+            "exam_updated",
+            entity_type="exam",
+            entity_id=exam.id,
+            details={"title": exam.title, "updated_fields": sorted(payload.model_dump(exclude_unset=True).keys())},
+        )
+        return exam
     except LookupError as exc:
         _raise_not_found(exc)
     except ValueError as exc:
@@ -182,7 +201,16 @@ def update_exam_publish_status(
     current_user: User = Depends(require_admin),
 ):
     try:
-        return set_exam_published(db, exam_id, payload.is_published, current_user)
+        exam = set_exam_published(db, exam_id, payload.is_published, current_user)
+        log_admin_activity(
+            db,
+            current_user,
+            "exam_published" if payload.is_published else "exam_unpublished",
+            entity_type="exam",
+            entity_id=exam.id,
+            details={"title": exam.title},
+        )
+        return exam
     except LookupError as exc:
         _raise_not_found(exc)
     except ValueError as exc:
@@ -197,7 +225,16 @@ def update_exam_result_publish_status(
     current_user: User = Depends(require_admin),
 ):
     try:
-        return set_exam_result_published(db, exam_id, payload.is_result_published, current_user)
+        exam = set_exam_result_published(db, exam_id, payload.is_result_published, current_user)
+        log_admin_activity(
+            db,
+            current_user,
+            "result_published" if payload.is_result_published else "result_unpublished",
+            entity_type="exam",
+            entity_id=exam.id,
+            details={"title": exam.title},
+        )
+        return exam
     except LookupError as exc:
         _raise_not_found(exc)
     except ValueError as exc:
@@ -212,7 +249,16 @@ def update_exam_archive_status(
     current_user: User = Depends(require_admin),
 ):
     try:
-        return set_exam_archived(db, exam_id, payload.is_archived, current_user)
+        exam = set_exam_archived(db, exam_id, payload.is_archived, current_user)
+        log_admin_activity(
+            db,
+            current_user,
+            "exam_archived" if payload.is_archived else "exam_unarchived",
+            entity_type="exam",
+            entity_id=exam.id,
+            details={"title": exam.title},
+        )
+        return exam
     except LookupError as exc:
         _raise_not_found(exc)
     except ValueError as exc:
@@ -227,6 +273,14 @@ def delete_existing_exam(
 ):
     try:
         delete_exam(db, exam_id, current_user)
+        log_admin_activity(
+            db,
+            current_user,
+            "exam_deleted",
+            entity_type="exam",
+            entity_id=exam_id,
+            details=f"Deleted exam {exam_id}",
+        )
     except LookupError as exc:
         _raise_not_found(exc)
     except ValueError as exc:
@@ -241,7 +295,16 @@ def create_exam_question(
     current_user: User = Depends(require_admin),
 ):
     try:
-        return add_question(db, exam_id, payload, current_user)
+        question = add_question(db, exam_id, payload, current_user)
+        log_admin_activity(
+            db,
+            current_user,
+            "question_created",
+            entity_type="question",
+            entity_id=question.id,
+            details={"exam_id": exam_id, "prompt": question.prompt},
+        )
+        return question
     except LookupError as exc:
         _raise_not_found(exc)
     except ValueError as exc:
@@ -256,7 +319,16 @@ def create_exam_questions_bulk(
     current_user: User = Depends(require_admin),
 ):
     try:
-        return add_questions_bulk(db, exam_id, payload, current_user)
+        questions = add_questions_bulk(db, exam_id, payload, current_user)
+        log_admin_activity(
+            db,
+            current_user,
+            "questions_bulk_imported",
+            entity_type="exam",
+            entity_id=exam_id,
+            details={"created_count": len(questions)},
+        )
+        return questions
     except LookupError as exc:
         _raise_not_found(exc)
     except ValueError as exc:
@@ -291,7 +363,22 @@ async def import_exam_questions_from_docx(
         )
 
     try:
-        return import_questions_from_docx(db, exam_id, content, current_user)
+        result = import_questions_from_docx(db, exam_id, content, current_user)
+        if result.created_count > 0:
+            log_admin_activity(
+                db,
+                current_user,
+                "docx_imported",
+                entity_type="exam",
+                entity_id=exam_id,
+                details={
+                    "filename": file.filename,
+                    "created_count": result.created_count,
+                    "valid_count": result.valid_count,
+                    "invalid_count": result.invalid_count,
+                },
+            )
+        return result
     except LookupError as exc:
         _raise_not_found(exc)
     except ValueError as exc:
@@ -307,7 +394,16 @@ def update_exam_question(
     current_user: User = Depends(require_admin),
 ):
     try:
-        return update_question(db, exam_id, question_id, payload, current_user)
+        question = update_question(db, exam_id, question_id, payload, current_user)
+        log_admin_activity(
+            db,
+            current_user,
+            "question_updated",
+            entity_type="question",
+            entity_id=question.id,
+            details={"exam_id": exam_id, "prompt": question.prompt},
+        )
+        return question
     except LookupError as exc:
         _raise_not_found(exc)
     except ValueError as exc:
@@ -323,6 +419,14 @@ def delete_exam_question(
 ):
     try:
         delete_question(db, exam_id, question_id, current_user)
+        log_admin_activity(
+            db,
+            current_user,
+            "question_deleted",
+            entity_type="question",
+            entity_id=question_id,
+            details={"exam_id": exam_id},
+        )
     except LookupError as exc:
         _raise_not_found(exc)
     except ValueError as exc:

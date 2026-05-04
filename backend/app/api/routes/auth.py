@@ -5,6 +5,7 @@ from app.api.deps.auth import get_current_user, get_db, require_admin
 from app.models.user import User
 from app.schemas.auth import LoginRequest, TokenResponse
 from app.schemas.user import MessageResponse, PasswordResetRequest, UserCreate, UserRead, UserUpdate
+from app.services.admin_activity_service import log_admin_activity
 from app.services.auth_service import (
     create_student_user,
     create_user,
@@ -51,7 +52,16 @@ def create_user_as_admin(
     current_user: User = Depends(require_admin),
 ):
     try:
-        return create_user(db, payload, current_admin=current_user)
+        created_user = create_user(db, payload, current_admin=current_user)
+        log_admin_activity(
+            db,
+            current_user,
+            "admin_created_user",
+            entity_type="user",
+            entity_id=created_user.id,
+            details={"email": created_user.email, "role": created_user.role.value},
+        )
+        return created_user
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -75,7 +85,22 @@ def update_user_as_admin(
     current_user: User = Depends(require_admin),
 ):
     try:
-        return update_user(db, user_id, payload, current_user)
+        updated_user = update_user(db, user_id, payload, current_user)
+        updates = payload.model_dump(exclude_unset=True)
+        is_deactivation = updates.get("is_active") is False
+        log_admin_activity(
+            db,
+            current_user,
+            "admin_deactivated_user" if is_deactivation else "admin_updated_user",
+            entity_type="user",
+            entity_id=updated_user.id,
+            details=(
+                f"Deactivated user {updated_user.email}"
+                if is_deactivation
+                else {"email": updated_user.email, "updated_fields": sorted(updates.keys())}
+            ),
+        )
+        return updated_user
     except LookupError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -93,10 +118,18 @@ def reset_user_password_as_admin(
     user_id: int,
     payload: PasswordResetRequest,
     db: Session = Depends(get_db),
-    _: User = Depends(require_admin),
+    current_user: User = Depends(require_admin),
 ):
     try:
-        reset_user_password(db, user_id, payload.new_password)
+        target_user = reset_user_password(db, user_id, payload.new_password)
+        log_admin_activity(
+            db,
+            current_user,
+            "admin_reset_password",
+            entity_type="user",
+            entity_id=target_user.id,
+            details=f"Password reset for user {target_user.email}",
+        )
         return {"message": "Password reset successfully."}
     except LookupError as exc:
         raise HTTPException(
@@ -112,7 +145,16 @@ def deactivate_user_as_admin(
     current_user: User = Depends(require_admin),
 ):
     try:
-        return deactivate_user(db, user_id, current_user)
+        deactivated_user = deactivate_user(db, user_id, current_user)
+        log_admin_activity(
+            db,
+            current_user,
+            "admin_deactivated_user",
+            entity_type="user",
+            entity_id=deactivated_user.id,
+            details=f"Deactivated user {deactivated_user.email}",
+        )
+        return deactivated_user
     except LookupError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

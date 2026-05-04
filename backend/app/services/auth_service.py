@@ -165,7 +165,7 @@ def update_user(db: Session, user_id: int, user_in: UserUpdate, current_admin: U
     return user
 
 
-def reset_user_password(db: Session, user_id: int, new_password: str) -> None:
+def reset_user_password(db: Session, user_id: int, new_password: str) -> User:
     user = get_user_by_id(db, user_id)
     if not user:
         raise LookupError("User not found.")
@@ -173,6 +173,8 @@ def reset_user_password(db: Session, user_id: int, new_password: str) -> None:
     user.password_hash = hash_password(new_password)
     db.add(user)
     db.commit()
+    db.refresh(user)
+    return user
 
 
 def deactivate_user(db: Session, user_id: int, current_admin: User) -> User:

@@ -194,7 +194,7 @@ h3 {
 }
 
 .admin-tabs {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   margin: 22px 0 0;
 }
 
@@ -530,6 +530,25 @@ select:focus {
 .exam-card p {
   color: var(--muted);
   line-height: 1.55;
+}
+
+.exam-instructions {
+  display: grid;
+  gap: 6px;
+  padding: 12px;
+  border: 1px solid rgba(15, 118, 110, 0.18);
+  border-radius: 8px;
+  color: var(--ink);
+  background: var(--surface-strong);
+}
+
+.exam-instructions strong {
+  font-size: 0.9rem;
+}
+
+.exam-instructions p {
+  margin: 0;
+  color: var(--muted);
 }
 
 .exam-meta {
@@ -1636,6 +1655,10 @@ select:focus {
   margin-bottom: 16px;
 }
 
+.details-instructions {
+  margin-bottom: 16px;
+}
+
 .compact-stack .question-panel {
   padding: 18px;
 }
@@ -1657,7 +1680,15 @@ select:focus {
   align-items: center;
 }
 
-.results-filter-bar .search-box {
+.activity-filter-bar {
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) minmax(180px, 260px);
+  gap: 12px;
+  align-items: center;
+}
+
+.results-filter-bar .search-box,
+.activity-filter-bar .search-box {
   min-width: 0;
 }
 
@@ -1672,6 +1703,10 @@ select:focus {
   width: 100%;
   min-width: 1120px;
   border-collapse: collapse;
+}
+
+.activity-table {
+  min-width: 900px;
 }
 
 .results-table th,
@@ -1794,7 +1829,8 @@ select:focus {
   .builder-workspace,
   .exam-attempt-grid,
   .export-controls,
-  .results-filter-bar {
+  .results-filter-bar,
+  .activity-filter-bar {
     grid-template-columns: 1fr;
   }
 

@@ -60,6 +60,13 @@ def _validate_question(question_in: QuestionCreate) -> None:
         raise ValueError("A multiple-choice question needs exactly one correct option.")
 
 
+def _clean_optional_text(value: str | None) -> str | None:
+    if value is None:
+        return None
+    stripped = value.strip()
+    return stripped or None
+
+
 def _build_question(exam_id: int, question_in: QuestionCreate) -> Question:
     _validate_question(question_in)
     question = Question(
@@ -396,7 +403,8 @@ def create_exam(db: Session, exam_in: ExamCreate, created_by: User) -> Exam:
     exam = Exam(
         title=exam_in.title,
         subject=exam_in.subject,
-        description=exam_in.description,
+        description=_clean_optional_text(exam_in.description),
+        instructions=_clean_optional_text(exam_in.instructions),
         duration_minutes=exam_in.duration_minutes,
         starts_at=exam_in.starts_at,
         ends_at=exam_in.ends_at,
@@ -417,6 +425,10 @@ def update_exam(db: Session, exam_id: int, exam_in: ExamUpdate, current_user: Us
     _ensure_draft_exam(exam)
 
     updates = exam_in.model_dump(exclude_unset=True)
+    for field in ("description", "instructions"):
+        if field in updates:
+            updates[field] = _clean_optional_text(updates[field])
+
     for field, value in updates.items():
         setattr(exam, field, value)
 
