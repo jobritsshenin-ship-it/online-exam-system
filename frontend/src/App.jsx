@@ -15,7 +15,6 @@ import {
   PlusCircle,
   Save,
   Search,
-  Send,
   ShieldCheck,
   Trash2,
   UserCheck,
@@ -34,8 +33,14 @@ const AUTH_STORAGE_KEY = 'exam_portal_auth'
 const STUDENT_EMAIL_DOMAIN = '@stellamaryscoe.edu.in'
 const COLLEGE_NAME = "Stella Mary's College of Engineering"
 const PORTAL_TITLE = 'Skill Enhancement Exam Portal'
-const SYSTEM_EXAM_WARNING = 'Do not switch tabs, minimize, exit fullscreen, refresh, close, or leave the exam screen. Doing so will automatically submit your exam.'
-const DEFAULT_EXAM_INSTRUCTIONS = 'Read the exam instructions carefully before starting. Answer every question, save your responses as you move through the exam, and submit before the timer ends.'
+const SYSTEM_EXAM_WARNING = 'The exam will be submitted automatically when the timer ends. Leaving the exam screen will also submit your attempt.'
+const DEFAULT_EXAM_INSTRUCTIONS = 'Read the exam instructions carefully before starting. Answer every question and keep the exam screen open until the timer ends.'
+const EXAM_POLICY_POINTS = [
+  'You cannot manually submit before the exam time ends.',
+  'Your answers are saved as you select them.',
+  'The exam will auto-submit when time expires.',
+  'Leaving, refreshing, switching tabs, minimizing, or exiting fullscreen will auto-submit the exam.',
+]
 
 const createEmptyCredentials = () => ({
   email: '',
@@ -201,6 +206,18 @@ function formatStudentExamError(message) {
   return message || 'Unable to continue this exam right now.'
 }
 
+function getAutoSubmitSuccessMessage(reason) {
+  if (reason === 'timer_expired') {
+    return 'Time is over. Your exam has been submitted automatically.'
+  }
+
+  if (reason === 'route_leave' || reason === 'logout_during_exam') {
+    return 'Your exam was submitted because you left the exam screen.'
+  }
+
+  return 'Your exam was submitted automatically by the exam security rules.'
+}
+
 function formatDateTime(value) {
   if (!value) return 'Not available'
   const date = new Date(value)
@@ -330,9 +347,14 @@ function App() {
     <div className="app-shell">
       <TopBar user={auth.user} onLogout={handleLogout} />
       {auth.user.role === 'admin' ? (
-        <AdminDashboard token={auth.access_token} onAuthExpired={handleAuthExpired} />
+        <AdminDashboard
+          key={`admin-${auth.user.id}-${auth.access_token}`}
+          token={auth.access_token}
+          onAuthExpired={handleAuthExpired}
+        />
       ) : (
         <StudentDashboard
+          key={`student-${auth.user.id}-${auth.access_token}`}
           token={auth.access_token}
           user={auth.user}
           onAuthExpired={handleAuthExpired}
@@ -364,7 +386,8 @@ function LoginScreen({ onAuthenticated }) {
         method: 'POST',
         body: credentials,
       })
-      onAuthenticated(data)
+      const currentUser = await apiRequest('/auth/me', { token: data.access_token })
+      onAuthenticated({ ...data, user: currentUser })
     } catch (err) {
       setError(err.message)
     } finally {
@@ -704,8 +727,6 @@ function StudentDashboard({ token, user, onAuthExpired, onLogoutGuardChange }) {
   )
   const selectedCount = Object.values(answers).filter(hasSelectedAnswer).length
   const reviewCount = Object.values(review).filter(Boolean).length
-  const totalQuestions = activeExam?.questions?.length ?? 0
-  const canSubmit = activeExam && totalQuestions > 0
   const submissionsByExamId = useMemo(() => {
     const map = new Map()
     currentStudentSubmissions.forEach((submission) => {
@@ -753,6 +774,18 @@ function StudentDashboard({ token, user, onAuthExpired, onLogoutGuardChange }) {
     loadStudentData()
   }, [loadStudentData])
 
+  const upsertCurrentStudentSubmission = useCallback((submission) => {
+    if (!submission || Number(submission.student_id) !== currentStudentId) return
+    setSubmissions((current) => {
+      const existingIndex = current.findIndex((item) => Number(item.id) === Number(submission.id))
+      if (existingIndex === -1) {
+        return [submission, ...current]
+      }
+
+      return current.map((item, index) => (index === existingIndex ? submission : item))
+    })
+  }, [currentStudentId])
+
   const reportEvent = useCallback(
     async (eventType, details, { keepalive = false } = {}) => {
       const exam = activeExamRef.current
@@ -794,6 +827,7 @@ function StudentDashboard({ token, user, onAuthExpired, onLogoutGuardChange }) {
 
         if (updateUi) {
           setResult({ ...data, exam_title: exam.title })
+          upsertCurrentStudentSubmission(data)
           setActiveExam(null)
           setActiveSubmission(null)
           setAnswers({})
@@ -802,7 +836,7 @@ function StudentDashboard({ token, user, onAuthExpired, onLogoutGuardChange }) {
           setStatus({
             loading: false,
             error: '',
-            success: 'Your exam was submitted because you left the exam screen.',
+            success: getAutoSubmitSuccessMessage(reason),
           })
         }
 
@@ -817,7 +851,7 @@ function StudentDashboard({ token, user, onAuthExpired, onLogoutGuardChange }) {
         return null
       }
     },
-    [loadStudentData, onAuthExpired, token],
+    [loadStudentData, onAuthExpired, token, upsertCurrentStudentSubmission],
   )
 
   useEffect(() => {
@@ -839,6 +873,14 @@ function StudentDashboard({ token, user, onAuthExpired, onLogoutGuardChange }) {
       setResult(null)
     } catch (err) {
       if (handleAuthenticatedError(err, onAuthExpired)) return
+      const normalizedMessage = err.message?.toLowerCase() ?? ''
+      if (
+        normalizedMessage.includes('cannot be reopened') ||
+        normalizedMessage.includes('already started') ||
+        normalizedMessage.includes('already submitted')
+      ) {
+        await loadStudentData()
+      }
       setStatus({ loading: false, error: formatStudentExamError(err.message), success: '' })
       return
     }
@@ -876,6 +918,14 @@ function StudentDashboard({ token, user, onAuthExpired, onLogoutGuardChange }) {
       return true
     } catch (err) {
       if (handleAuthenticatedError(err, onAuthExpired)) return
+      const normalizedMessage = err.message?.toLowerCase() ?? ''
+      if (
+        normalizedMessage.includes('exam time has expired') ||
+        normalizedMessage.includes('exam has ended')
+      ) {
+        await autoSubmitActiveExam('timer_expired')
+        return false
+      }
       setStatus({ loading: false, error: formatStudentExamError(err.message), success: '' })
       return false
     }
@@ -894,58 +944,6 @@ function StudentDashboard({ token, user, onAuthExpired, onLogoutGuardChange }) {
     const nextReviewValue = !review[questionId]
     setReview((current) => ({ ...current, [questionId]: nextReviewValue }))
     return saveAnswer(questionId, answers[questionId] ?? null, nextReviewValue)
-  }
-
-  async function submitExam({ skipConfirmation = false, auto = false } = {}) {
-    if (!canSubmit) return
-
-    if (auto) {
-      await autoSubmitActiveExam('manual_security_lock')
-      return
-    }
-
-    const unansweredCount = Math.max(0, totalQuestions - selectedCount)
-
-    if (!skipConfirmation) {
-      const message =
-        unansweredCount > 0
-          ? `You have ${unansweredCount} unanswered question(s). Submit anyway?`
-          : 'Are you sure you want to submit the exam?'
-      if (!window.confirm(message)) return
-    }
-
-    setStatus({ loading: true, error: '', success: '' })
-    try {
-      const data = await apiRequest(`/exams/${activeExam.id}/submit`, {
-        method: 'POST',
-        token,
-        body: {
-          answers: buildSelectedAnswerPayload(answers),
-        },
-      })
-      hasAutoSubmittedRef.current = true
-      autoSubmitInProgressRef.current = true
-      setResult({ ...data, exam_title: activeExam.title })
-      setActiveExam(null)
-      setActiveSubmission(null)
-      setAnswers({})
-      setReview({})
-      await loadStudentData()
-      setStatus({
-        loading: false,
-        error: '',
-        success: 'Your exam has been submitted successfully. Results will be published by the admin later.',
-      })
-    } catch (err) {
-      if (handleAuthenticatedError(err, onAuthExpired)) return
-      setStatus({
-        loading: false,
-        error: auto
-          ? `Time is over. ${formatStudentExamError(err.message)}`
-          : formatStudentExamError(err.message),
-        success: '',
-      })
-    }
   }
 
   return (
@@ -975,12 +973,10 @@ function StudentDashboard({ token, user, onAuthExpired, onLogoutGuardChange }) {
           setAnswers={setAnswers}
           user={user}
           selectedCount={selectedCount}
-          canSubmit={canSubmit}
           isLoading={status.loading}
           onSave={saveAnswer}
           onClear={clearAnswer}
           onToggleReview={toggleReview}
-          onSubmit={submitExam}
           onAutoSubmit={autoSubmitActiveExam}
           onCancel={() => autoSubmitActiveExam('route_leave')}
           onProctorEvent={reportEvent}
@@ -1080,6 +1076,11 @@ function StudentExamCard({ exam, submission, onStart }) {
           <div className="exam-instructions">
             <strong>Exam Instructions</strong>
             <p>{examInstructions}</p>
+            <ul>
+              {EXAM_POLICY_POINTS.map((point) => (
+                <li key={point}>{point}</li>
+              ))}
+            </ul>
           </div>
           <p className="exam-start-warning">
             {SYSTEM_EXAM_WARNING}
@@ -1101,12 +1102,10 @@ function ExamAttempt({
   setAnswers,
   user,
   selectedCount,
-  canSubmit,
   isLoading,
   onSave,
   onClear,
   onToggleReview,
-  onSubmit,
   onAutoSubmit,
   onCancel,
   onProctorEvent,
@@ -1162,7 +1161,7 @@ function ExamAttempt({
   useEffect(() => {
     if (!deadline || remainingSeconds > 0 || autoSubmitRef.current) return
     autoSubmitRef.current = true
-    void onAutoSubmit('manual_security_lock')
+    void onAutoSubmit('timer_expired')
   }, [deadline, onAutoSubmit, remainingSeconds])
 
   useEffect(() => {
@@ -1318,10 +1317,7 @@ function ExamAttempt({
             <span className={`timer-pill ${isUrgent ? 'urgent' : ''}`}>
               {deadline ? formatRemainingTime(remainingSeconds) : '--:--'}
             </span>
-            <button className="primary-button" type="button" disabled={!canSubmit || isLoading} onClick={() => onSubmit()}>
-              {isLoading ? <Loader2 className="spin" size={18} aria-hidden="true" /> : <Send size={18} aria-hidden="true" />}
-              Submit exam
-            </button>
+            <span className="auto-submit-pill">Auto-submit at time end</span>
             <button className="secondary-button" type="button" disabled={isLoading} onClick={onCancel}>
               Leave
             </button>
@@ -1439,6 +1435,7 @@ function ExamAttempt({
                 </div>
               ))}
             </div>
+            <p className="palette-auto-note">Auto-submit at time end</p>
           </aside>
         </div>
       </div>

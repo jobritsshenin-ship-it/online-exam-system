@@ -177,6 +177,7 @@ class AutoSubmitRequest(SubmissionCreate):
         "logout_during_exam",
         "manual_security_lock",
         "reopen_attempt",
+        "timer_expired",
     ] = "manual_security_lock"
 
     @field_validator("reason")

@@ -607,6 +607,15 @@ select:focus {
   color: var(--muted);
 }
 
+.exam-instructions ul {
+  display: grid;
+  gap: 5px;
+  margin: 4px 0 0;
+  padding-left: 20px;
+  color: var(--ink);
+  line-height: 1.45;
+}
+
 .exam-meta {
   gap: 8px;
   flex-wrap: wrap;
@@ -1211,6 +1220,22 @@ select:focus {
   background: #fff5f4;
 }
 
+.auto-submit-pill,
+.palette-auto-note {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 42px;
+  padding: 8px 12px;
+  border: 1px solid rgba(180, 83, 9, 0.26);
+  border-radius: 8px;
+  color: var(--accent);
+  background: #fff8eb;
+  font-size: 0.86rem;
+  font-weight: 900;
+  text-align: center;
+}
+
 .exam-attempt-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(280px, 340px);
@@ -1497,6 +1522,11 @@ select:focus {
   font-size: 0.78rem;
   text-align: center;
   font-variant-numeric: tabular-nums;
+}
+
+.palette-auto-note {
+  width: 100%;
+  margin: 0;
 }
 
 .status-icon {
