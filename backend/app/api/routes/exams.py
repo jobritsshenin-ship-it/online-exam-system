@@ -47,6 +47,7 @@ from app.services.exam_service import (
 )
 
 router = APIRouter(prefix="/exams", tags=["exams"])
+MAX_WORD_IMPORT_BYTES = 10 * 1024 * 1024
 
 
 def _raise_not_found(exc: LookupError):
@@ -277,6 +278,12 @@ async def import_exam_questions_from_docx(
         )
 
     content = await file.read()
+    if len(content) > MAX_WORD_IMPORT_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Word file must be 10 MB or smaller.",
+        )
+
     if not content:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

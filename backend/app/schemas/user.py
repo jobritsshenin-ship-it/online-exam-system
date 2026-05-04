@@ -1,8 +1,26 @@
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 from app.utils.enums import UserRole
+
+
+PASSWORD_COMPLEXITY_ERROR = "Password must include uppercase, lowercase, number, and special character."
+
+
+def validate_password_complexity(value: str) -> str:
+    if len(value) < 8:
+        raise ValueError("Password must be at least 8 characters.")
+
+    has_uppercase = any(char.isupper() for char in value)
+    has_lowercase = any(char.islower() for char in value)
+    has_number = any(char.isdigit() for char in value)
+    has_special = any(not char.isalnum() and not char.isspace() for char in value)
+
+    if not all((has_uppercase, has_lowercase, has_number, has_special)):
+        raise ValueError(PASSWORD_COMPLEXITY_ERROR)
+
+    return value
 
 
 class UserBase(BaseModel):
@@ -28,6 +46,11 @@ class UserCreate(BaseModel):
     is_active: bool = True
     is_superuser: bool = False
 
+    @field_validator("password")
+    @classmethod
+    def password_must_be_complex(cls, value: str) -> str:
+        return validate_password_complexity(value)
+
 
 class UserUpdate(BaseModel):
     email: EmailStr | None = None
@@ -43,6 +66,11 @@ class UserUpdate(BaseModel):
 
 class PasswordResetRequest(BaseModel):
     new_password: str = Field(min_length=8)
+
+    @field_validator("new_password")
+    @classmethod
+    def new_password_must_be_complex(cls, value: str) -> str:
+        return validate_password_complexity(value)
 
 
 class MessageResponse(BaseModel):

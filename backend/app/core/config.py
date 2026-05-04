@@ -1,8 +1,18 @@
 from functools import lru_cache
 from typing import Annotated, List
 
-from pydantic import field_validator
+from pydantic import ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+
+
+WEAK_JWT_SECRET_VALUES = {
+    "change-this-secret-key",
+    "secret",
+    "password",
+    "test",
+    "dev-secret",
+}
+JWT_SECRET_PRODUCTION_ERROR = "JWT_SECRET_KEY must be set to a strong secret in production."
 
 
 class Settings(BaseSettings):
@@ -16,9 +26,10 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+psycopg2://postgres:postgres@localhost:5432/online_exam_db"
     redis_url: str = "redis://localhost:6379/0"
 
-    jwt_secret_key: str
+    jwt_secret_key: str = "change-this-secret-key"
     jwt_algorithm: str = "HS256"
     jwt_access_token_expire_minutes: int = 60
+    max_request_body_size_bytes: int = 5 * 1024 * 1024
 
     first_superuser_email: str = "admin@example.com"
     first_superuser_password: str = "Admin@123"
@@ -50,6 +61,19 @@ class Settings(BaseSettings):
             if not value.strip():
                 return []
             return [origin.strip() for origin in value.split(",")]
+        return value
+
+    @field_validator("jwt_secret_key")
+    @classmethod
+    def validate_jwt_secret_key(cls, value: str, info: ValidationInfo) -> str:
+        app_env = str(info.data.get("app_env", "development")).strip().lower()
+        if app_env not in {"production", "prod"}:
+            return value
+
+        secret = (value or "").strip()
+        if secret.lower() in WEAK_JWT_SECRET_VALUES or len(secret) < 32:
+            raise ValueError(JWT_SECRET_PRODUCTION_ERROR)
+
         return value
 
 
