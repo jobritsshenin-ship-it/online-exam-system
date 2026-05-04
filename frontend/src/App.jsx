@@ -37,10 +37,13 @@ const SYSTEM_EXAM_WARNING = 'The exam will be submitted automatically when the t
 const DEFAULT_EXAM_INSTRUCTIONS = 'Read the exam instructions carefully before starting. Answer every question and keep the exam screen open until the timer ends.'
 const EXAM_POLICY_POINTS = [
   'You cannot manually submit before the exam time ends.',
+  'You cannot leave the exam screen during an active attempt.',
   'Your answers are saved as you select them.',
   'The exam will auto-submit when time expires.',
   'Leaving, refreshing, switching tabs, minimizing, or exiting fullscreen will auto-submit the exam.',
 ]
+const DEPARTMENT_OPTIONS = ['CSE', 'AIDS', 'MECH', 'CIVIL', 'EEE', 'ECE', 'MBA', 'S&H']
+const YEAR_OPTIONS = ['1st Year', '2nd Year', '3rd Year', '4th Year']
 
 const createEmptyCredentials = () => ({
   email: '',
@@ -52,7 +55,7 @@ const createEmptySignup = () => ({
   institutional_email: '',
   register_number: '',
   department: '',
-  section: '',
+  year: '',
   password: '',
   confirmPassword: '',
 })
@@ -315,10 +318,12 @@ const QUESTION_STATUS_ORDER = [
 
 function App() {
   const [auth, setAuth] = useState(readStoredAuth)
+  const [isStudentAttemptActive, setIsStudentAttemptActive] = useState(false)
   const logoutGuardRef = useRef(null)
 
   function handleAuthenticated(nextAuth) {
     localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(nextAuth))
+    setIsStudentAttemptActive(false)
     setAuth(nextAuth)
   }
 
@@ -327,16 +332,19 @@ function App() {
       await logoutGuardRef.current('logout')
     }
     localStorage.removeItem(AUTH_STORAGE_KEY)
+    setIsStudentAttemptActive(false)
     setAuth(null)
   }
 
   function handleAuthExpired() {
     localStorage.removeItem(AUTH_STORAGE_KEY)
+    setIsStudentAttemptActive(false)
     setAuth(null)
   }
 
   const registerLogoutGuard = useCallback((handler) => {
     logoutGuardRef.current = handler
+    setIsStudentAttemptActive(Boolean(handler))
   }, [])
 
   if (!auth) {
@@ -345,7 +353,11 @@ function App() {
 
   return (
     <div className="app-shell">
-      <TopBar user={auth.user} onLogout={handleLogout} />
+      <TopBar
+        user={auth.user}
+        onLogout={handleLogout}
+        hideLogout={auth.user.role === 'student' && isStudentAttemptActive}
+      />
       {auth.user.role === 'admin' ? (
         <AdminDashboard
           key={`admin-${auth.user.id}-${auth.access_token}`}
@@ -400,7 +412,7 @@ function LoginScreen({ onAuthenticated }) {
     const institutionalEmail = signup.institutional_email.trim().toLowerCase()
     const registerNumber = signup.register_number.trim()
     const department = signup.department.trim()
-    const section = signup.section.trim()
+    const year = signup.year.trim()
 
     if (!fullName) return 'Full name is required.'
     if (!institutionalEmail) return 'Institutional email is required.'
@@ -409,7 +421,9 @@ function LoginScreen({ onAuthenticated }) {
     }
     if (!registerNumber) return 'Register number is required.'
     if (!department) return 'Department is required.'
-    if (!section) return 'Section is required.'
+    if (!DEPARTMENT_OPTIONS.includes(department)) return 'Choose a valid department.'
+    if (!year) return 'Year is required.'
+    if (!YEAR_OPTIONS.includes(year)) return 'Choose a valid year.'
     if (!signup.password) return 'Password is required.'
     if (signup.password !== signup.confirmPassword) return 'Confirm password must match.'
 
@@ -439,7 +453,7 @@ function LoginScreen({ onAuthenticated }) {
           register_number: signup.register_number.trim(),
           department: signup.department.trim(),
           batch: '',
-          class_name: signup.section.trim(),
+          class_name: signup.year.trim(),
           is_active: true,
           is_superuser: false,
         },
@@ -646,26 +660,38 @@ function LoginScreen({ onAuthenticated }) {
               </label>
               <label>
                 Department
-                <input
+                <select
                   value={signup.department}
                   onChange={(event) =>
                     setSignup((current) => ({ ...current, department: event.target.value }))
                   }
-                  placeholder="Enter department"
                   required
-                />
+                >
+                  <option value="">Select department</option>
+                  {DEPARTMENT_OPTIONS.map((department) => (
+                    <option value={department} key={department}>
+                      {department}
+                    </option>
+                  ))}
+                </select>
               </label>
             </div>
             <label>
-              Section
-              <input
-                value={signup.section}
+              Year
+              <select
+                value={signup.year}
                 onChange={(event) =>
-                  setSignup((current) => ({ ...current, section: event.target.value }))
+                  setSignup((current) => ({ ...current, year: event.target.value }))
                 }
-                placeholder="Enter section"
                 required
-              />
+              >
+                <option value="">Select year</option>
+                {YEAR_OPTIONS.map((year) => (
+                  <option value={year} key={year}>
+                    {year}
+                  </option>
+                ))}
+              </select>
             </label>
             {error ? <p className="form-error">{error}</p> : null}
             <button className="primary-button" type="submit" disabled={isRegistering}>
@@ -683,7 +709,7 @@ function LoginScreen({ onAuthenticated }) {
   )
 }
 
-function TopBar({ user, onLogout }) {
+function TopBar({ user, onLogout, hideLogout = false }) {
   return (
     <header className="topbar">
       <div className="topbar-brand">
@@ -698,9 +724,11 @@ function TopBar({ user, onLogout }) {
           <UserRound size={16} aria-hidden="true" />
           {user.full_name}
         </span>
-        <button className="icon-button" type="button" onClick={onLogout} title="Sign out">
-          <LogOut size={18} aria-hidden="true" />
-        </button>
+        {!hideLogout ? (
+          <button className="icon-button" type="button" onClick={onLogout} title="Sign out">
+            <LogOut size={18} aria-hidden="true" />
+          </button>
+        ) : null}
       </div>
     </header>
   )
@@ -978,7 +1006,6 @@ function StudentDashboard({ token, user, onAuthExpired, onLogoutGuardChange }) {
           onClear={clearAnswer}
           onToggleReview={toggleReview}
           onAutoSubmit={autoSubmitActiveExam}
-          onCancel={() => autoSubmitActiveExam('route_leave')}
           onProctorEvent={reportEvent}
         />
       ) : (
@@ -1107,7 +1134,6 @@ function ExamAttempt({
   onClear,
   onToggleReview,
   onAutoSubmit,
-  onCancel,
   onProctorEvent,
 }) {
   const questions = useMemo(() => exam.questions ?? [], [exam.questions])
@@ -1318,9 +1344,6 @@ function ExamAttempt({
               {deadline ? formatRemainingTime(remainingSeconds) : '--:--'}
             </span>
             <span className="auto-submit-pill">Auto-submit at time end</span>
-            <button className="secondary-button" type="button" disabled={isLoading} onClick={onCancel}>
-              Leave
-            </button>
           </div>
         </div>
 
@@ -1930,6 +1953,22 @@ function AdminDashboard({ token, onAuthExpired }) {
       setStatus({ loading: false, error: 'Register number is required for student users.', success: '' })
       return
     }
+    if (userForm.role === 'student' && !userForm.department.trim()) {
+      setStatus({ loading: false, error: 'Department is required for student users.', success: '' })
+      return
+    }
+    if (userForm.role === 'student' && !DEPARTMENT_OPTIONS.includes(userForm.department.trim())) {
+      setStatus({ loading: false, error: 'Choose a valid department for student users.', success: '' })
+      return
+    }
+    if (userForm.role === 'student' && !userForm.class_name.trim()) {
+      setStatus({ loading: false, error: 'Year is required for student users.', success: '' })
+      return
+    }
+    if (userForm.role === 'student' && !YEAR_OPTIONS.includes(userForm.class_name.trim())) {
+      setStatus({ loading: false, error: 'Choose a valid year for student users.', success: '' })
+      return
+    }
 
     setStatus({ loading: true, error: '', success: '' })
     try {
@@ -2012,7 +2051,7 @@ function AdminDashboard({ token, onAuthExpired }) {
     return Number(question?.marks ?? 0)
   }
 
-  function getStudentSection(submission) {
+  function getStudentYear(submission) {
     return submission.student_class_name ?? submission.student_batch ?? ''
   }
 
@@ -2072,7 +2111,7 @@ function AdminDashboard({ token, onAuthExpired }) {
           email: submission.student_email,
           register_number: submission.student_register_number ?? '',
           department: submission.student_department ?? '',
-          section: getStudentSection(submission),
+          year: getStudentYear(submission),
           score: hasScore ? score : '',
           total_marks: totalMarks,
           percentage: hasScore && totalMarks ? ((score / totalMarks) * 100).toFixed(2) : '',
@@ -2087,7 +2126,7 @@ function AdminDashboard({ token, onAuthExpired }) {
       'email',
       'register_number',
       'department',
-      'section',
+      'year',
       'score',
       'total_marks',
       'percentage',
@@ -2115,7 +2154,7 @@ function AdminDashboard({ token, onAuthExpired }) {
         email: submission.student_email,
         register_number: submission.student_register_number ?? '',
         department: submission.student_department ?? '',
-        section: getStudentSection(submission),
+        year: getStudentYear(submission),
         submitted_at: submission.submitted_at ?? '',
         question_no: index + 1,
         question: answer.question_prompt,
@@ -2131,7 +2170,7 @@ function AdminDashboard({ token, onAuthExpired }) {
         email: '',
         register_number: '',
         department: '',
-        section: '',
+        year: '',
         submitted_at: '',
         question_no: '',
         question: '',
@@ -2149,7 +2188,7 @@ function AdminDashboard({ token, onAuthExpired }) {
       'email',
       'register_number',
       'department',
-      'section',
+      'year',
       'submitted_at',
       'question_no',
       'question',
@@ -2471,17 +2510,33 @@ function AdminDashboard({ token, onAuthExpired }) {
               </label>
               <label>
                 Department
-                <input
+                <select
                   value={userForm.department}
                   onChange={(event) => setUserForm((current) => ({ ...current, department: event.target.value }))}
-                />
+                  required={userForm.role === 'student'}
+                >
+                  <option value="">Select department</option>
+                  {DEPARTMENT_OPTIONS.map((department) => (
+                    <option value={department} key={department}>
+                      {department}
+                    </option>
+                  ))}
+                </select>
               </label>
               <label>
-                Section
-                <input
+                Year
+                <select
                   value={userForm.class_name}
                   onChange={(event) => setUserForm((current) => ({ ...current, class_name: event.target.value }))}
-                />
+                  required={userForm.role === 'student'}
+                >
+                  <option value="">Select year</option>
+                  {YEAR_OPTIONS.map((year) => (
+                    <option value={year} key={year}>
+                      {year}
+                    </option>
+                  ))}
+                </select>
               </label>
               <label>
                 Register Number
@@ -2576,7 +2631,7 @@ function AdminDashboard({ token, onAuthExpired }) {
                   <th>Student name</th>
                   <th>Register number</th>
                   <th>Department</th>
-                  <th>Section</th>
+                  <th>Year</th>
                   <th>Score</th>
                   <th>Submission status</th>
                   <th>Submitted time</th>
@@ -2596,7 +2651,7 @@ function AdminDashboard({ token, onAuthExpired }) {
                       </td>
                       <td>{submission.student_register_number ?? '-'}</td>
                       <td>{submission.student_department ?? '-'}</td>
-                      <td>{submission.student_class_name ?? submission.student_batch ?? '-'}</td>
+                      <td>{getStudentYear(submission) || '-'}</td>
                       <td>{submission.score ?? '-'}</td>
                       <td>{submission.status === 'submitted' ? 'Submitted' : 'In Progress'}</td>
                       <td>{formatDateTime(submission.submitted_at)}</td>
@@ -2710,7 +2765,7 @@ function AdminDashboard({ token, onAuthExpired }) {
           detailState={submissionDetailState}
           exam={submissionDetailState.submission ? examById.get(submissionDetailState.submission.exam_id) : null}
           getAnswerMaxMarks={getAnswerMaxMarks}
-          getStudentSection={getStudentSection}
+          getStudentYear={getStudentYear}
           onClose={closeSubmissionDetail}
           onDownload={exportStudentPerformanceCsv}
         />
@@ -2789,7 +2844,7 @@ function SubmissionDetailModal({
   detailState,
   exam,
   getAnswerMaxMarks,
-  getStudentSection,
+  getStudentYear,
   onClose,
   onDownload,
 }) {
@@ -2833,8 +2888,8 @@ function SubmissionDetailModal({
                 <strong>{submission.student_department ?? '-'}</strong>
               </div>
               <div>
-                <span>Section</span>
-                <strong>{getStudentSection(submission) || '-'}</strong>
+                <span>Year</span>
+                <strong>{getStudentYear(submission) || '-'}</strong>
               </div>
               <div>
                 <span>Exam title</span>
@@ -2892,11 +2947,11 @@ function SubmissionDetailModal({
 
 function SubmissionReviewPanel({ submissions }) {
   function getStudentDetails(submission) {
+    const year = submission.student_class_name ?? submission.student_batch
     return [
       submission.student_register_number,
       submission.student_department,
-      submission.student_batch,
-      submission.student_class_name,
+      year,
     ]
       .filter(Boolean)
       .join(' - ')
