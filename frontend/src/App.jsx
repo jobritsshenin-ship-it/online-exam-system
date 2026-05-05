@@ -133,6 +133,48 @@ async function apiRequest(path, { method = 'GET', token, body, keepalive = false
   return response.json()
 }
 
+function getDownloadFilename(contentDisposition, fallback) {
+  const match = /filename="?([^"]+)"?/i.exec(contentDisposition || '')
+  return match?.[1] || fallback
+}
+
+async function downloadApiFile(path, { token, fallbackFilename }) {
+  let response
+  try {
+    response = await fetch(`${API_BASE_URL}${path}`, {
+      headers: {
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+    })
+  } catch {
+    throw new ApiError('Unable to connect to the server. Please make sure the backend is running.')
+  }
+
+  if (!response.ok) {
+    let message = response.statusText || 'Something went wrong. Please try again.'
+    try {
+      const data = await response.json()
+      message = formatApiErrorDetail(data.detail) || message
+    } catch {
+      // Keep the HTTP status text when the response is not JSON.
+    }
+    if (response.status === 403) {
+      message = 'You do not have permission to perform this action.'
+    }
+    throw new ApiError(message, response.status)
+  }
+
+  const blob = await response.blob()
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = getDownloadFilename(response.headers.get('content-disposition'), fallbackFilename)
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  URL.revokeObjectURL(url)
+}
+
 function handleAuthenticatedError(error, onAuthExpired) {
   if (isAuthExpiredError(error)) {
     onAuthExpired()
@@ -1518,6 +1560,13 @@ function AdminDashboard({ token, onAuthExpired }) {
     error: '',
     submission: null,
   })
+  const [studentHistoryState, setStudentHistoryState] = useState({
+    isOpen: false,
+    loading: false,
+    error: '',
+    student: null,
+    history: [],
+  })
   const isPersistingDraftRef = useRef(false)
 
   const dashboardSummary = useMemo(() => {
@@ -2082,10 +2131,69 @@ function AdminDashboard({ token, onAuthExpired }) {
     return submission.student_class_name ?? submission.student_batch ?? ''
   }
 
+  function studentFromSubmission(submission) {
+    return {
+      id: submission.student_id,
+      full_name: submission.student_full_name,
+      email: submission.student_email,
+      register_number: submission.student_register_number,
+      department: submission.student_department,
+      year: getStudentYear(submission),
+    }
+  }
+
+  function studentFromUser(user) {
+    return {
+      id: user.id,
+      full_name: user.full_name,
+      email: user.email,
+      register_number: user.register_number,
+      department: user.department,
+      year: user.class_name || user.batch,
+    }
+  }
+
   function replaceSubmissionInState(nextSubmission) {
     setSubmissions((current) =>
       current.map((submission) => (submission.id === nextSubmission.id ? nextSubmission : submission)),
     )
+  }
+
+  async function openStudentExamHistory(student) {
+    setStudentHistoryState({
+      isOpen: true,
+      loading: true,
+      error: '',
+      student,
+      history: [],
+    })
+    try {
+      const history = await apiRequest(`/admin/students/${student.id}/exam-history`, { token })
+      setStudentHistoryState({
+        isOpen: true,
+        loading: false,
+        error: '',
+        student,
+        history,
+      })
+      setSubmissions((current) =>
+        current.map((submission) => {
+          const nextHistoryItem = history.find((item) => item.submission_id === submission.id)
+          return nextHistoryItem
+            ? { ...submission, integrity_status: nextHistoryItem.integrity_status }
+            : submission
+        }),
+      )
+    } catch (err) {
+      if (handleAuthenticatedError(err, onAuthExpired)) return
+      setStudentHistoryState({
+        isOpen: true,
+        loading: false,
+        error: err.message,
+        student,
+        history: [],
+      })
+    }
   }
 
   async function openSubmissionDetail(submissionId) {
@@ -2122,6 +2230,32 @@ function AdminDashboard({ token, onAuthExpired }) {
       error: '',
       submission: null,
     })
+  }
+
+  function closeStudentHistory() {
+    setStudentHistoryState({
+      isOpen: false,
+      loading: false,
+      error: '',
+      student: null,
+      history: [],
+    })
+  }
+
+  async function downloadStudentHistoryCsv() {
+    const studentId = studentHistoryState.student?.id ?? studentHistoryState.history[0]?.student_id
+    if (!studentId) return
+
+    setStatus({ loading: true, error: '', success: '' })
+    try {
+      await downloadApiFile(`/admin/students/${studentId}/exam-history.csv`, {
+        token,
+        fallbackFilename: `student_exam_history_${studentId}.csv`,
+      })
+      setStatus({ loading: false, error: '', success: 'Student exam history CSV downloaded.' })
+    } catch (err) {
+      showError(err)
+    }
   }
 
   async function resolveSecurityAlert(alertId) {
@@ -2524,6 +2658,16 @@ function AdminDashboard({ token, onAuthExpired }) {
                       <KeyRound size={16} aria-hidden="true" />
                       Reset Password
                     </button>
+                    {user.role === 'student' ? (
+                      <button
+                        className="secondary-button"
+                        type="button"
+                        onClick={() => openStudentExamHistory(studentFromUser(user))}
+                      >
+                        <Flag size={16} aria-hidden="true" />
+                        View Results
+                      </button>
+                    ) : null}
                   </div>
                   {resetState.userId === user.id ? (
                     <form className="inline-reset-form" onSubmit={resetPassword}>
@@ -2767,6 +2911,14 @@ function AdminDashboard({ token, onAuthExpired }) {
                             <Download size={16} aria-hidden="true" />
                             Performance
                           </button>
+                          <button
+                            className="secondary-button"
+                            type="button"
+                            onClick={() => openStudentExamHistory(studentFromSubmission(submission))}
+                          >
+                            <Flag size={16} aria-hidden="true" />
+                            Student History
+                          </button>
                         </div>
                       </td>
                     </tr>
@@ -2918,6 +3070,14 @@ function AdminDashboard({ token, onAuthExpired }) {
         />
       ) : null}
 
+      {studentHistoryState.isOpen ? (
+        <StudentExamHistoryModal
+          historyState={studentHistoryState}
+          onClose={closeStudentHistory}
+          onDownload={downloadStudentHistoryCsv}
+        />
+      ) : null}
+
       {deleteExamCandidate ? (
         <div className="modal-backdrop" role="presentation">
           <div className="modal-panel" role="dialog" aria-modal="true" aria-labelledby="delete-exam-title">
@@ -2984,6 +3144,135 @@ function AdminExamDetails({ exam }) {
         {exam.questions.length === 0 ? <p className="empty-state">No questions yet.</p> : null}
       </div>
     </section>
+  )
+}
+
+function StudentExamHistoryModal({ historyState, onClose, onDownload }) {
+  const firstHistoryItem = historyState.history[0]
+  const student = firstHistoryItem
+    ? {
+        full_name: firstHistoryItem.student_name,
+        email: firstHistoryItem.student_email,
+        register_number: firstHistoryItem.register_number,
+        department: firstHistoryItem.department,
+        year: firstHistoryItem.year,
+      }
+    : historyState.student
+
+  const scoredItems = historyState.history.filter((item) => item.score !== null && item.score !== undefined)
+  const averageScore =
+    scoredItems.length > 0
+      ? scoredItems.reduce((total, item) => total + Number(item.score), 0) / scoredItems.length
+      : null
+  const passCount = historyState.history.filter((item) => item.pass_fail === 'Pass').length
+  const failCount = historyState.history.filter((item) => item.pass_fail === 'Fail').length
+
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <div className="modal-panel student-history-modal" role="dialog" aria-modal="true" aria-labelledby="student-history-title">
+        <button
+          className="icon-button modal-close"
+          type="button"
+          onClick={onClose}
+          aria-label="Close student exam history"
+        >
+          <X size={18} aria-hidden="true" />
+        </button>
+
+        <div className="panel-title-row student-history-heading">
+          <SectionTitle icon={Flag} eyebrow="Student" title="Student Exam History" />
+          <button
+            className="primary-button"
+            type="button"
+            onClick={onDownload}
+            disabled={historyState.loading || historyState.history.length === 0}
+          >
+            <Download size={16} aria-hidden="true" />
+            Download Student Exam History CSV
+          </button>
+        </div>
+
+        {historyState.loading ? <LoadingBlock label="Loading student exam history" /> : null}
+        {historyState.error ? <p className="notice error">{historyState.error}</p> : null}
+
+        {!historyState.loading && !historyState.error ? (
+          <>
+            <div className="submission-detail-grid">
+              <div>
+                <span>Student name</span>
+                <strong>{student?.full_name ?? '-'}</strong>
+              </div>
+              <div>
+                <span>Email</span>
+                <strong>{student?.email ?? '-'}</strong>
+              </div>
+              <div>
+                <span>Register number</span>
+                <strong>{student?.register_number ?? '-'}</strong>
+              </div>
+              <div>
+                <span>Department</span>
+                <strong>{student?.department ?? '-'}</strong>
+              </div>
+              <div>
+                <span>Year</span>
+                <strong>{student?.year ?? '-'}</strong>
+              </div>
+            </div>
+
+            <div className="student-history-summary">
+              <Metric label="Exams attended" value={historyState.history.length} />
+              <Metric label="Average score" value={averageScore === null ? '-' : averageScore.toFixed(1)} />
+              <Metric label="Pass" value={passCount} />
+              <Metric label="Fail" value={failCount} />
+            </div>
+
+            {historyState.history.length > 0 ? (
+              <div className="results-table-wrap">
+                <table className="results-table student-history-table">
+                  <thead>
+                    <tr>
+                      <th>Exam title</th>
+                      <th>Subject</th>
+                      <th>Status</th>
+                      <th>Score</th>
+                      <th>Total marks</th>
+                      <th>Percentage</th>
+                      <th>Pass/Fail</th>
+                      <th>Submitted time</th>
+                      <th>Result published</th>
+                      <th>Integrity</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {historyState.history.map((item) => (
+                      <tr key={item.submission_id}>
+                        <td>{item.exam_title}</td>
+                        <td>{item.exam_subject ?? '-'}</td>
+                        <td>{item.status}</td>
+                        <td>{item.score ?? '-'}</td>
+                        <td>{item.total_marks}</td>
+                        <td>{item.percentage !== null && item.percentage !== undefined ? `${item.percentage}%` : '-'}</td>
+                        <td>{item.pass_fail}</td>
+                        <td>{formatDateTime(item.submitted_at)}</td>
+                        <td>{item.is_result_published ? 'Yes' : 'No'}</td>
+                        <td>
+                          <span className={`integrity-pill ${getIntegrityStatusClass(item.integrity_status)}`}>
+                            {formatIntegrityStatus(item.integrity_status)}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <p className="empty-state">No exam history found for this student.</p>
+            )}
+          </>
+        ) : null}
+      </div>
+    </div>
   )
 }
 

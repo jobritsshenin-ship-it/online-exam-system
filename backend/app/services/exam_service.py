@@ -29,6 +29,9 @@ from app.services.integrity_service import seal_submission_integrity, verify_sub
 from app.utils.enums import QuestionType, SubmissionStatus, UserRole
 
 
+PASS_THRESHOLD_MARKS = 50
+
+
 def _exam_options():
     return (selectinload(Exam.questions).selectinload(Question.options),)
 
@@ -1001,3 +1004,81 @@ def list_exam_submissions(db: Session, exam_id: int, current_user: User) -> list
     if integrity_changed:
         db.commit()
     return submissions
+
+
+def _get_exam_total_marks(exam: Exam | None) -> int:
+    if not exam:
+        return 0
+    return sum(int(question.marks or 0) for question in exam.questions)
+
+
+def _get_history_status(submission: Submission) -> str:
+    if submission.status == SubmissionStatus.IN_PROGRESS:
+        return "In Progress"
+    if submission.score is None:
+        return "Pending"
+    return "Submitted"
+
+
+def _get_history_pass_fail(submission: Submission) -> str:
+    if submission.status == SubmissionStatus.IN_PROGRESS:
+        return "In Progress"
+    if submission.score is None:
+        return "Pending"
+    return "Pass" if submission.score >= PASS_THRESHOLD_MARKS else "Fail"
+
+
+def _build_student_exam_history_item(submission: Submission) -> dict:
+    total_marks = _get_exam_total_marks(submission.exam)
+    percentage = (
+        round((float(submission.score) / total_marks) * 100, 2)
+        if submission.score is not None and total_marks > 0
+        else None
+    )
+    student = submission.student
+    exam = submission.exam
+    return {
+        "submission_id": submission.id,
+        "exam_id": submission.exam_id,
+        "exam_title": exam.title if exam else f"Exam {submission.exam_id}",
+        "exam_subject": exam.subject if exam else None,
+        "student_id": submission.student_id,
+        "student_name": student.full_name,
+        "student_email": student.email,
+        "register_number": student.register_number,
+        "department": student.department,
+        "year": student.class_name or student.batch,
+        "status": _get_history_status(submission),
+        "score": submission.score,
+        "total_marks": total_marks,
+        "percentage": percentage,
+        "pass_fail": _get_history_pass_fail(submission),
+        "submitted_at": submission.submitted_at,
+        "started_at": submission.started_at,
+        "is_result_published": bool(exam and exam.is_result_published),
+        "integrity_status": submission.integrity_status,
+    }
+
+
+def get_student_exam_history(db: Session, student_id: int, current_user: User) -> tuple[User, list[dict]]:
+    if current_user.role != UserRole.ADMIN:
+        raise LookupError("Student exam history not found.")
+
+    student = db.get(User, student_id)
+    if not student or student.role != UserRole.STUDENT:
+        raise LookupError("Student not found.")
+
+    statement = (
+        select(Submission)
+        .where(Submission.student_id == student.id)
+        .options(*_submission_options())
+        .order_by(Submission.started_at.desc(), Submission.id.desc())
+    )
+    submissions = list(db.execute(statement).scalars().unique().all())
+    integrity_changed = False
+    for submission in submissions:
+        integrity_changed = verify_submission_integrity(db, submission) or integrity_changed
+    if integrity_changed:
+        db.commit()
+
+    return student, [_build_student_exam_history_item(submission) for submission in submissions]

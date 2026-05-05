@@ -42,3 +42,25 @@ class SecurityAlertRead(BaseModel):
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class StudentExamHistoryItemRead(BaseModel):
+    submission_id: int
+    exam_id: int
+    exam_title: str
+    exam_subject: str | None
+    student_id: int
+    student_name: str
+    student_email: str
+    register_number: str | None
+    department: str | None
+    year: str | None
+    status: str
+    score: int | None
+    total_marks: int
+    percentage: float | None
+    pass_fail: str
+    submitted_at: datetime | None
+    started_at: datetime
+    is_result_published: bool
+    integrity_status: str

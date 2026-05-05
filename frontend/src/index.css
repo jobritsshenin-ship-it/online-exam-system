@@ -1038,6 +1038,12 @@ select:focus {
   overflow: auto;
 }
 
+.student-history-modal {
+  width: min(1120px, 100%);
+  max-height: min(calc(100dvh - 40px), 900px);
+  overflow: auto;
+}
+
 .submission-detail-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
@@ -1062,6 +1068,27 @@ select:focus {
 
 .submission-detail-grid strong {
   overflow-wrap: anywhere;
+}
+
+.student-history-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+}
+
+.student-history-summary .metric {
+  min-width: 0;
+  border-color: var(--line);
+  color: var(--ink);
+  background: #fbfdfc;
+}
+
+.student-history-summary .metric span {
+  color: var(--muted);
+}
+
+.student-history-table {
+  min-width: 1060px;
 }
 
 .modal-close {
@@ -2414,7 +2441,8 @@ select:focus {
   }
 
   .modal-panel,
-  .submission-detail-modal {
+  .submission-detail-modal,
+  .student-history-modal {
     width: 100%;
     max-width: calc(100vw - 24px);
     max-height: calc(100dvh - 24px);

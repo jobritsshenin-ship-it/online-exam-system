@@ -1,4 +1,8 @@
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+import csv
+import re
+from io import StringIO
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -6,12 +10,65 @@ from app.api.deps.auth import get_db, require_admin
 from app.models.exam import Exam
 from app.models.submission import Submission
 from app.models.user import User
-from app.schemas.admin import AdminActivityLogRead, AdminSummaryRead, SecurityAlertRead
+from app.schemas.admin import (
+    AdminActivityLogRead,
+    AdminSummaryRead,
+    SecurityAlertRead,
+    StudentExamHistoryItemRead,
+)
 from app.services.admin_activity_service import list_admin_activity
+from app.services.exam_service import get_student_exam_history
 from app.services.security_alert_service import list_security_alerts, resolve_security_alert
 from app.utils.enums import SubmissionStatus, UserRole
 
 router = APIRouter(prefix="/admin", tags=["admin"])
+STUDENT_HISTORY_CSV_COLUMNS = [
+    "student_name",
+    "email",
+    "register_number",
+    "department",
+    "year",
+    "exam_title",
+    "exam_subject",
+    "status",
+    "score",
+    "total_marks",
+    "percentage",
+    "pass_fail",
+    "started_at",
+    "submitted_at",
+    "result_published",
+    "integrity_status",
+]
+
+
+def _safe_csv_filename_part(value: str | int | None) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9_-]+", "_", str(value or "").strip()).strip("_")
+    return cleaned or "student"
+
+
+def _student_history_csv_rows(history: list[dict]) -> list[dict]:
+    return [
+        {
+            "student_name": item["student_name"],
+            "email": item["student_email"],
+            "register_number": item["register_number"] or "",
+            "department": item["department"] or "",
+            "year": item["year"] or "",
+            "exam_title": item["exam_title"],
+            "exam_subject": item["exam_subject"] or "",
+            "status": item["status"],
+            "score": item["score"] if item["score"] is not None else "",
+            "total_marks": item["total_marks"],
+            "percentage": item["percentage"] if item["percentage"] is not None else "",
+            "pass_fail": item["pass_fail"],
+            "started_at": item["started_at"].isoformat() if item["started_at"] else "",
+            "submitted_at": item["submitted_at"].isoformat() if item["submitted_at"] else "",
+            "result_published": "Yes" if item["is_result_published"] else "No",
+            "integrity_status": item["integrity_status"],
+        }
+        for item in history
+    ]
 
 
 @router.get("/summary", response_model=AdminSummaryRead)
@@ -72,6 +129,44 @@ def read_admin_activity(
         offset=offset,
         action=action,
         entity_type=entity_type,
+    )
+
+
+@router.get("/students/{student_id}/exam-history", response_model=list[StudentExamHistoryItemRead])
+def read_student_exam_history(
+    student_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    try:
+        _, history = get_student_exam_history(db, student_id, current_user)
+        return history
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@router.get("/students/{student_id}/exam-history.csv")
+def download_student_exam_history_csv(
+    student_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    try:
+        student, history = get_student_exam_history(db, student_id, current_user)
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+    output = StringIO()
+    writer = csv.DictWriter(output, fieldnames=STUDENT_HISTORY_CSV_COLUMNS)
+    writer.writeheader()
+    writer.writerows(_student_history_csv_rows(history))
+
+    filename_key = _safe_csv_filename_part(student.register_number or student.id)
+    filename = f"student_exam_history_{filename_key}.csv"
+    return Response(
+        content=output.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 
