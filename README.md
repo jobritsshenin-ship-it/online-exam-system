@@ -21,6 +21,8 @@ A full-stack online examination portal with role-based administration, controlle
 - Word `.docx` import
 - Strict anti-cheat auto-submit
 - Result publish/unpublish
+- HMAC-SHA256 result integrity checks for admin result data
+- Admin security alerts for detected result tampering
 - Archive/delete exam safety
 - Admin activity log
 
@@ -65,10 +67,30 @@ Create `backend/.env` from `backend/.env.example` and configure:
 - `DATABASE_URL`
 - `REDIS_URL`
 - `JWT_SECRET_KEY`
+- `INTEGRITY_SECRET_KEY`
 - `FIRST_SUPERUSER_EMAIL`
 - `FIRST_SUPERUSER_PASSWORD`
 
-Use a strong `JWT_SECRET_KEY` for production. Do not commit `.env`.
+Use strong `JWT_SECRET_KEY` and `INTEGRITY_SECRET_KEY` values for production. `INTEGRITY_SECRET_KEY` is only used for result integrity HMACs and must not reuse the JWT secret. Do not commit `.env`.
+
+## Result Integrity
+
+Submitted result-critical data is sealed with HMAC-SHA256 using `INTEGRITY_SECRET_KEY`. This protects against silent changes to submission score, status, submit timestamps, selected answers, correctness, awarded marks, marked-for-review state, and the correct option used to verify each answer.
+
+This is tamper-evident integrity protection, not encryption. If someone changes database rows but does not control the backend environment secret, admin result views will detect a mismatch, mark the submission as `tampered`, and create a critical security alert. If an attacker controls both the database and backend environment secret, app-level HMACs cannot fully protect the data.
+
+Old submissions without an integrity hash remain `unverified`; they are not automatically marked as tampered.
+
+## Local Database Backup
+
+Create a compressed JSON backup of important tables:
+
+```powershell
+cd backend
+python scripts/backup_database.py
+```
+
+Backups are written to `backend/backups/` as `online_exam_backup_YYYYMMDD_HHMMSS.json.gz`. The script exports users, exams, questions, options, submissions, submission answers, submission events, admin activity logs, and security alerts. User password fields are redacted in the JSON backup.
 
 ## Default Local Demo Credentials
 
@@ -92,11 +114,14 @@ python scripts/seed_sample_exam.py
 ## Production Notes
 
 - Use a strong JWT secret and rotate it if it is ever exposed.
+- Use a separate strong integrity secret and rotate it carefully because existing result seals depend on it.
 - Do not commit `.env` or production credentials.
 - Configure CORS to only allow the deployed frontend origin.
 - Run `alembic upgrade head` before serving a new backend release.
 - Render free tier may sleep, which can delay first requests.
+- Render's local filesystem is ephemeral, so local backup files created on Render are not durable.
 - Use paid hosting for real institutional exams.
+- Future production backup work should write encrypted backups to durable cloud storage instead of relying on Render's local disk.
 
 ## Known Limitations
 

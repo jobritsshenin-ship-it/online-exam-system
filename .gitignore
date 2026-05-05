@@ -12,3 +12,6 @@ frontend/dist/
 .coverage
 htmlcov/
 *.log
+backend/backups/
+*.backup
+*.dump

@@ -13,6 +13,15 @@ WEAK_JWT_SECRET_VALUES = {
     "dev-secret",
 }
 JWT_SECRET_PRODUCTION_ERROR = "JWT_SECRET_KEY must be set to a strong secret in production."
+WEAK_INTEGRITY_SECRET_VALUES = {
+    "secret",
+    "test",
+    "change-this",
+    "dev-secret",
+    "integrity-secret",
+    "change-this-integrity-secret-in-production",
+}
+INTEGRITY_SECRET_PRODUCTION_ERROR = "INTEGRITY_SECRET_KEY must be set to a strong secret in production."
 
 
 class Settings(BaseSettings):
@@ -29,6 +38,7 @@ class Settings(BaseSettings):
     jwt_secret_key: str = "change-this-secret-key"
     jwt_algorithm: str = "HS256"
     jwt_access_token_expire_minutes: int = 60
+    integrity_secret_key: str = "change-this-integrity-secret-in-production"
     max_request_body_size_bytes: int = 5 * 1024 * 1024
 
     first_superuser_email: str = "admin@example.com"
@@ -73,6 +83,27 @@ class Settings(BaseSettings):
         secret = (value or "").strip()
         if secret.lower() in WEAK_JWT_SECRET_VALUES or len(secret) < 32:
             raise ValueError(JWT_SECRET_PRODUCTION_ERROR)
+
+        return value
+
+    @field_validator("integrity_secret_key")
+    @classmethod
+    def validate_integrity_secret_key(cls, value: str, info: ValidationInfo) -> str:
+        app_env = str(info.data.get("app_env", "development")).strip().lower()
+        if app_env not in {"production", "prod"}:
+            return value
+
+        secret = (value or "").strip()
+        jwt_secret = str(info.data.get("jwt_secret_key", "")).strip()
+        normalized_secret = secret.lower()
+        if (
+            not secret
+            or len(secret) < 32
+            or normalized_secret in WEAK_INTEGRITY_SECRET_VALUES
+            or normalized_secret.startswith("change-this")
+            or (jwt_secret and secret == jwt_secret)
+        ):
+            raise ValueError(INTEGRITY_SECRET_PRODUCTION_ERROR)
 
         return value
 

@@ -1,4 +1,4 @@
-from app.schemas.admin import AdminActivityLogRead, AdminSummaryRead
+from app.schemas.admin import AdminActivityLogRead, AdminSummaryRead, SecurityAlertRead
 from app.schemas.exam import (
     ExamAdminRead,
     ExamArchive,
@@ -22,6 +22,7 @@ from app.schemas.exam import (
 __all__ = [
     "AdminActivityLogRead",
     "AdminSummaryRead",
+    "SecurityAlertRead",
     "ExamAdminRead",
     "ExamArchive",
     "ExamCreate",

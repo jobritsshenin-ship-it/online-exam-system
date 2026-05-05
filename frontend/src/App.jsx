@@ -264,6 +264,20 @@ function getSubmissionAnswerStatus(answer) {
   return answer.is_correct ? 'Correct' : 'Wrong'
 }
 
+function formatIntegrityStatus(value) {
+  const normalized = String(value || 'unverified').toLowerCase()
+  if (normalized === 'verified') return 'Verified'
+  if (normalized === 'tampered') return 'Tampered'
+  return 'Unverified'
+}
+
+function getIntegrityStatusClass(value) {
+  const normalized = String(value || 'unverified').toLowerCase()
+  if (normalized === 'verified') return 'verified'
+  if (normalized === 'tampered') return 'tampered'
+  return 'unverified'
+}
+
 function getAttemptDeadline(submission, exam) {
   const startedAt = submission?.started_at ? new Date(submission.started_at) : null
   const endsAt = exam.ends_at ? new Date(exam.ends_at) : null
@@ -1472,6 +1486,7 @@ function AdminDashboard({ token, onAuthExpired }) {
   const [submissions, setSubmissions] = useState([])
   const [users, setUsers] = useState([])
   const [activityLogs, setActivityLogs] = useState([])
+  const [securityAlerts, setSecurityAlerts] = useState([])
   const [summary, setSummary] = useState(null)
   const [activeTab, setActiveTab] = useState('exams')
   const [status, setStatus] = useState({ loading: true, error: '', success: '' })
@@ -1621,20 +1636,32 @@ function AdminDashboard({ token, onAuthExpired }) {
     })
   }, [activityActionFilter, activityLogs, activitySearch])
 
+  const unresolvedSecurityAlerts = useMemo(
+    () => securityAlerts.filter((alert) => !alert.is_resolved),
+    [securityAlerts],
+  )
+
+  const unresolvedCriticalAlerts = useMemo(
+    () => unresolvedSecurityAlerts.filter((alert) => alert.severity === 'critical'),
+    [unresolvedSecurityAlerts],
+  )
+
   const loadAdminData = useCallback(
     async (examId = null) => {
       setStatus((current) => ({ ...current, loading: true, error: '' }))
       try {
-        const [examData, userData, summaryData, activityData] = await Promise.all([
+        const [examData, userData, summaryData, activityData, securityAlertData] = await Promise.all([
           apiRequest('/exams', { token }),
           apiRequest('/auth/users', { token }),
           apiRequest('/admin/summary', { token }),
           apiRequest('/admin/activity?limit=200', { token }),
+          apiRequest('/admin/security-alerts?limit=200', { token }),
         ])
         setExams(examData)
         setUsers(userData)
         setSummary(summaryData)
         setActivityLogs(activityData)
+        setSecurityAlerts(securityAlertData)
         const submissionSets = await Promise.all(
           examData.map((exam) => apiRequest(`/exams/${exam.id}/submissions`, { token })),
         )
@@ -2055,6 +2082,12 @@ function AdminDashboard({ token, onAuthExpired }) {
     return submission.student_class_name ?? submission.student_batch ?? ''
   }
 
+  function replaceSubmissionInState(nextSubmission) {
+    setSubmissions((current) =>
+      current.map((submission) => (submission.id === nextSubmission.id ? nextSubmission : submission)),
+    )
+  }
+
   async function openSubmissionDetail(submissionId) {
     setSubmissionDetailState({
       isOpen: true,
@@ -2064,6 +2097,7 @@ function AdminDashboard({ token, onAuthExpired }) {
     })
     try {
       const detail = await apiRequest(`/exams/submissions/${submissionId}`, { token })
+      replaceSubmissionInState(detail)
       setSubmissionDetailState({
         isOpen: true,
         loading: false,
@@ -2090,7 +2124,23 @@ function AdminDashboard({ token, onAuthExpired }) {
     })
   }
 
-  function exportExamMarksCsv() {
+  async function resolveSecurityAlert(alertId) {
+    setStatus({ loading: true, error: '', success: '' })
+    try {
+      const resolvedAlert = await apiRequest(`/admin/security-alerts/${alertId}/resolve`, {
+        method: 'PATCH',
+        token,
+      })
+      setSecurityAlerts((current) =>
+        current.map((alert) => (alert.id === resolvedAlert.id ? resolvedAlert : alert)),
+      )
+      setStatus({ loading: false, error: '', success: 'Security alert resolved.' })
+    } catch (err) {
+      showError(err)
+    }
+  }
+
+  async function exportExamMarksCsv() {
     const examId = Number(resultExportExamId)
     const exam = examById.get(examId)
     if (!exam) {
@@ -2098,9 +2148,21 @@ function AdminDashboard({ token, onAuthExpired }) {
       return
     }
 
+    setStatus({ loading: true, error: '', success: '' })
+    let verifiedSubmissions = []
+    try {
+      verifiedSubmissions = await apiRequest(`/exams/${examId}/submissions`, { token })
+      setSubmissions((current) => [
+        ...verifiedSubmissions,
+        ...current.filter((submission) => Number(submission.exam_id) !== examId),
+      ])
+    } catch (err) {
+      showError(err)
+      return
+    }
+
     const totalMarks = getTotalMarks(exam)
-    const rows = submissions
-      .filter((submission) => Number(submission.exam_id) === examId)
+    const rows = verifiedSubmissions
       .map((submission) => {
         const hasScore = submission.score !== null && submission.score !== undefined
         const score = hasScore ? Number(submission.score) : null
@@ -2116,6 +2178,7 @@ function AdminDashboard({ token, onAuthExpired }) {
           total_marks: totalMarks,
           percentage: hasScore && totalMarks ? ((score / totalMarks) * 100).toFixed(2) : '',
           status: isSubmitted && hasScore ? (score >= 50 ? 'Pass' : 'Fail') : 'In Progress',
+          integrity_status: formatIntegrityStatus(submission.integrity_status),
           submitted_at: submission.submitted_at ?? '',
         }
       })
@@ -2131,6 +2194,7 @@ function AdminDashboard({ token, onAuthExpired }) {
       'total_marks',
       'percentage',
       'status',
+      'integrity_status',
       'submitted_at',
     ], rows)) {
       setStatus({ loading: false, error: 'No submissions are available for the selected exam.', success: '' })
@@ -2139,29 +2203,45 @@ function AdminDashboard({ token, onAuthExpired }) {
     setStatus({ loading: false, error: '', success: 'Exam marks CSV downloaded.' })
   }
 
-  function exportStudentPerformanceCsv(submission) {
-    const exam = examById.get(submission.exam_id)
+  async function exportStudentPerformanceCsv(submission) {
+    setStatus({ loading: true, error: '', success: '' })
+    let verifiedSubmission = submission
+    try {
+      verifiedSubmission = await apiRequest(`/exams/submissions/${submission.id}`, { token })
+      replaceSubmissionInState(verifiedSubmission)
+      setSubmissionDetailState((current) =>
+        current.submission?.id === verifiedSubmission.id
+          ? { ...current, submission: verifiedSubmission }
+          : current,
+      )
+    } catch (err) {
+      showError(err)
+      return
+    }
+
+    const exam = examById.get(verifiedSubmission.exam_id)
     const totalMarks = getTotalMarks(exam)
-    const submissionAnswers = submission.answers ?? []
-    const totalScore = submission.score ?? submissionAnswers.reduce(
+    const submissionAnswers = verifiedSubmission.answers ?? []
+    const totalScore = verifiedSubmission.score ?? submissionAnswers.reduce(
       (total, answer) => total + Number(answer.marks_awarded || 0),
       0,
     )
     const rows = [
       ...submissionAnswers.map((answer, index) => ({
-        exam_title: exam?.title ?? `Exam ${submission.exam_id}`,
-        student_name: submission.student_full_name,
-        email: submission.student_email,
-        register_number: submission.student_register_number ?? '',
-        department: submission.student_department ?? '',
-        year: getStudentYear(submission),
-        submitted_at: submission.submitted_at ?? '',
+        exam_title: exam?.title ?? `Exam ${verifiedSubmission.exam_id}`,
+        student_name: verifiedSubmission.student_full_name,
+        email: verifiedSubmission.student_email,
+        register_number: verifiedSubmission.student_register_number ?? '',
+        department: verifiedSubmission.student_department ?? '',
+        year: getStudentYear(verifiedSubmission),
+        submitted_at: verifiedSubmission.submitted_at ?? '',
+        integrity_status: formatIntegrityStatus(verifiedSubmission.integrity_status),
         question_no: index + 1,
         question: answer.question_prompt,
         student_answer: answer.selected_option_text ?? '',
         correct_answer: answer.correct_option_text ?? '',
         marks_awarded: answer.marks_awarded,
-        max_marks: getAnswerMaxMarks(submission, answer),
+        max_marks: getAnswerMaxMarks(verifiedSubmission, answer),
         status: getSubmissionAnswerStatus(answer),
       })),
       {
@@ -2172,6 +2252,7 @@ function AdminDashboard({ token, onAuthExpired }) {
         department: '',
         year: '',
         submitted_at: '',
+        integrity_status: formatIntegrityStatus(verifiedSubmission.integrity_status),
         question_no: '',
         question: '',
         student_answer: '',
@@ -2182,7 +2263,7 @@ function AdminDashboard({ token, onAuthExpired }) {
       },
     ]
 
-    if (!downloadCsv(`${sanitizeCsvFilename(submission.student_full_name)}-performance.csv`, [
+    if (!downloadCsv(`${sanitizeCsvFilename(verifiedSubmission.student_full_name)}-performance.csv`, [
       'exam_title',
       'student_name',
       'email',
@@ -2190,6 +2271,7 @@ function AdminDashboard({ token, onAuthExpired }) {
       'department',
       'year',
       'submitted_at',
+      'integrity_status',
       'question_no',
       'question',
       'student_answer',
@@ -2219,6 +2301,7 @@ function AdminDashboard({ token, onAuthExpired }) {
           <Metric label="Students" value={dashboardSummary.total_students} />
           <Metric label="Admins" value={dashboardSummary.total_admins} />
           <Metric label="Submissions" value={dashboardSummary.total_submissions} />
+          <Metric label="Critical alerts" value={unresolvedCriticalAlerts.length} />
           <Metric
             label="Average score"
             value={dashboardSummary.average_score === null ? '-' : dashboardSummary.average_score.toFixed(1)}
@@ -2241,6 +2324,10 @@ function AdminDashboard({ token, onAuthExpired }) {
         <button className={activeTab === 'results' ? 'active' : ''} type="button" onClick={() => setActiveTab('results')}>
           <Flag size={16} aria-hidden="true" />
           Results
+        </button>
+        <button className={activeTab === 'alerts' ? 'active' : ''} type="button" onClick={() => setActiveTab('alerts')}>
+          <AlertTriangle size={16} aria-hidden="true" />
+          Alerts ({unresolvedCriticalAlerts.length})
         </button>
         <button className={activeTab === 'activity' ? 'active' : ''} type="button" onClick={() => setActiveTab('activity')}>
           <ShieldCheck size={16} aria-hidden="true" />
@@ -2636,6 +2723,7 @@ function AdminDashboard({ token, onAuthExpired }) {
                   <th>Submission status</th>
                   <th>Submitted time</th>
                   <th>Result status</th>
+                  <th>Integrity</th>
                   <th>Actions</th>
                 </tr>
               </thead>
@@ -2656,6 +2744,11 @@ function AdminDashboard({ token, onAuthExpired }) {
                       <td>{submission.status === 'submitted' ? 'Submitted' : 'In Progress'}</td>
                       <td>{formatDateTime(submission.submitted_at)}</td>
                       <td>{exam?.is_result_published ? 'Results Published' : 'Results Not Published'}</td>
+                      <td>
+                        <span className={`integrity-pill ${getIntegrityStatusClass(submission.integrity_status)}`}>
+                          {formatIntegrityStatus(submission.integrity_status)}
+                        </span>
+                      </td>
                       <td>
                         <div className="table-actions">
                           <button
@@ -2688,6 +2781,60 @@ function AdminDashboard({ token, onAuthExpired }) {
           ) : null}
 
           <SubmissionReviewPanel submissions={filteredResultSubmissions} />
+        </section>
+      ) : null}
+
+      {activeTab === 'alerts' ? (
+        <section className="details-band results-workspace">
+          <div className="panel-title-row">
+            <SectionTitle icon={AlertTriangle} eyebrow="Security" title="Security Alerts" />
+            <div className="exam-meta">
+              <span>{unresolvedSecurityAlerts.length} unresolved</span>
+              <span className={unresolvedCriticalAlerts.length ? 'flag-pill' : ''}>
+                {unresolvedCriticalAlerts.length} critical
+              </span>
+            </div>
+          </div>
+
+          {securityAlerts.length > 0 ? (
+            <div className="security-alert-list">
+              {securityAlerts.map((alert) => (
+                <article
+                  className={`security-alert-card ${alert.severity === 'critical' ? 'critical' : ''}`}
+                  key={alert.id}
+                >
+                  <div>
+                    <div className="panel-title-row compact">
+                      <h3>{alert.title}</h3>
+                      <span className={`integrity-pill ${alert.severity === 'critical' ? 'tampered' : 'unverified'}`}>
+                        {formatActivityAction(alert.severity)}
+                      </span>
+                    </div>
+                    <p className="empty-state">{alert.message}</p>
+                    <div className="exam-meta">
+                      <span>{formatActivityAction(alert.alert_type)}</span>
+                      <span>{alert.entity_type ?? 'Entity'} #{alert.entity_id ?? '-'}</span>
+                      <span>{formatDateTime(alert.created_at)}</span>
+                      <span>{alert.is_resolved ? 'Resolved' : 'Unresolved'}</span>
+                    </div>
+                  </div>
+                  {!alert.is_resolved ? (
+                    <button
+                      className="secondary-button"
+                      type="button"
+                      onClick={() => resolveSecurityAlert(alert.id)}
+                      disabled={status.loading}
+                    >
+                      <CheckCircle2 size={16} aria-hidden="true" />
+                      Resolve
+                    </button>
+                  ) : null}
+                </article>
+              ))}
+            </div>
+          ) : (
+            <p className="empty-state">No security alerts recorded.</p>
+          )}
         </section>
       ) : null}
 
@@ -2907,7 +3054,22 @@ function SubmissionDetailModal({
                 <span>Total score</span>
                 <strong>{submission.score ?? '-'} / {totalMarks}</strong>
               </div>
+              <div>
+                <span>Integrity</span>
+                <strong className={`integrity-text ${getIntegrityStatusClass(submission.integrity_status)}`}>
+                  {formatIntegrityStatus(submission.integrity_status)}
+                </strong>
+              </div>
             </div>
+
+            {submission.integrity_status === 'tampered' ? (
+              <div className="cheat-panel integrity-warning">
+                <AlertTriangle size={18} aria-hidden="true" />
+                <div>
+                  <strong>Result integrity mismatch detected. Review Security Alerts.</strong>
+                </div>
+              </div>
+            ) : null}
 
             <div className="panel-title-row">
               <h3 id="submission-detail-title">Question-wise answers</h3>
@@ -2974,11 +3136,23 @@ function SubmissionReviewPanel({ submissions }) {
               <div className="exam-meta">
                 <span>{submission.status}</span>
                 <span>{submission.score ?? 0} marks</span>
+                <span className={`integrity-pill ${getIntegrityStatusClass(submission.integrity_status)}`}>
+                  {formatIntegrityStatus(submission.integrity_status)}
+                </span>
                 <span className={submission.cheat_event_count ? 'flag-pill' : ''}>
                   {submission.cheat_event_count} flags
                 </span>
               </div>
             </div>
+
+            {submission.integrity_status === 'tampered' ? (
+              <div className="cheat-panel integrity-warning">
+                <AlertTriangle size={18} aria-hidden="true" />
+                <div>
+                  <strong>Result integrity mismatch detected. Review Security Alerts.</strong>
+                </div>
+              </div>
+            ) : null}
 
             {submission.cheat_event_count ? (
               <div className="cheat-panel">

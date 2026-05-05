@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy import Boolean, CheckConstraint, DateTime, Enum, ForeignKey, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base_class import Base
@@ -11,6 +11,10 @@ class Submission(Base):
     __tablename__ = "submissions"
     __table_args__ = (
         UniqueConstraint("exam_id", "student_id", name="uq_submission_exam_student"),
+        CheckConstraint(
+            "integrity_status IN ('unverified', 'verified', 'tampered')",
+            name="ck_submissions_integrity_status",
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
@@ -29,6 +33,15 @@ class Submission(Base):
         nullable=False,
     )
     submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    integrity_hash: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    integrity_status: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        default="unverified",
+        index=True,
+    )
+    integrity_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    integrity_sealed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     exam: Mapped["Exam"] = relationship("Exam")
     student: Mapped["User"] = relationship("User")

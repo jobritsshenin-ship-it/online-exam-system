@@ -25,6 +25,7 @@ from app.schemas.exam import (
     SubmissionCreate,
     SubmissionEventCreate,
 )
+from app.services.integrity_service import seal_submission_integrity, verify_submission_integrity
 from app.utils.enums import QuestionType, SubmissionStatus, UserRole
 
 
@@ -373,6 +374,7 @@ def _auto_submit_submission(
     )
     db.add(event)
     db.add(submission)
+    seal_submission_integrity(db, submission)
     db.commit()
     return get_submission(db, submission.id, submission.student)
 
@@ -904,6 +906,7 @@ def submit_exam(
     submission.submitted_at = datetime.now(timezone.utc)
 
     db.add(submission)
+    seal_submission_integrity(db, submission)
     db.commit()
     return get_submission(db, submission.id, student)
 
@@ -966,6 +969,9 @@ def get_submission(db: Session, submission_id: int, current_user: User) -> Submi
     if current_user.role != UserRole.ADMIN and submission.student_id != current_user.id:
         raise LookupError("Submission not found.")
 
+    if current_user.role == UserRole.ADMIN and verify_submission_integrity(db, submission):
+        db.commit()
+
     return submission
 
 
@@ -987,4 +993,11 @@ def list_exam_submissions(db: Session, exam_id: int, current_user: User) -> list
         .options(*_submission_options())
         .order_by(Submission.started_at.desc())
     )
-    return list(db.execute(statement).scalars().unique().all())
+    submissions = list(db.execute(statement).scalars().unique().all())
+    integrity_changed = False
+    if current_user.role == UserRole.ADMIN:
+        for submission in submissions:
+            integrity_changed = verify_submission_integrity(db, submission) or integrity_changed
+    if integrity_changed:
+        db.commit()
+    return submissions

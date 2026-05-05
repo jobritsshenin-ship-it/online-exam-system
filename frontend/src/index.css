@@ -278,7 +278,7 @@ h3 {
 }
 
 .admin-tabs {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   margin: 22px 0 0;
 }
 
@@ -1876,7 +1876,7 @@ select:focus {
 
 .results-table {
   width: 100%;
-  min-width: 1120px;
+  min-width: 1240px;
   border-collapse: collapse;
 }
 
@@ -1939,6 +1939,75 @@ select:focus {
 .flag-pill {
   color: var(--danger) !important;
   background: #fef3f2 !important;
+}
+
+.integrity-pill {
+  display: inline-flex !important;
+  align-items: center;
+  width: fit-content;
+  min-height: 28px;
+  margin-top: 0 !important;
+  padding: 5px 9px;
+  border-radius: 999px;
+  font-size: 0.78rem !important;
+  font-weight: 900;
+}
+
+.integrity-pill.verified,
+.integrity-text.verified {
+  color: var(--success) !important;
+}
+
+.integrity-pill.verified {
+  background: #ecfdf3;
+}
+
+.integrity-pill.unverified,
+.integrity-text.unverified {
+  color: var(--accent) !important;
+}
+
+.integrity-pill.unverified {
+  background: #fff7ed;
+}
+
+.integrity-pill.tampered,
+.integrity-text.tampered {
+  color: var(--danger) !important;
+}
+
+.integrity-pill.tampered {
+  background: #fef3f2;
+}
+
+.security-alert-list {
+  display: grid;
+  gap: 14px;
+}
+
+.security-alert-card {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.security-alert-card.critical {
+  border-color: rgba(180, 35, 24, 0.28);
+  background: #fffafa;
+}
+
+.security-alert-card > div {
+  display: grid;
+  gap: 10px;
+}
+
+.integrity-warning {
+  margin: 16px 0;
 }
 
 .cheat-panel {
@@ -2364,7 +2433,8 @@ select:focus {
 
   .submission-item,
   .result-panel,
-  .cheat-panel {
+  .cheat-panel,
+  .security-alert-card {
     align-items: flex-start;
     flex-direction: column;
   }

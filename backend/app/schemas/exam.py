@@ -253,6 +253,9 @@ class SubmissionRead(BaseModel):
     score: int | None
     started_at: datetime
     submitted_at: datetime | None
+    integrity_status: str
+    integrity_checked_at: datetime | None
+    integrity_sealed_at: datetime | None
     cheat_event_count: int
     answers: List[SubmissionAnswerRead] = Field(default_factory=list)
     events: List[SubmissionEventRead] = Field(default_factory=list)

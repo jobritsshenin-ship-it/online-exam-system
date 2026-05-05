@@ -25,3 +25,20 @@ class AdminActivityLogRead(BaseModel):
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class SecurityAlertRead(BaseModel):
+    id: int
+    severity: str
+    alert_type: str
+    title: str
+    message: str
+    entity_type: str | None
+    entity_id: int | None
+    metadata_json: str | None
+    is_resolved: bool
+    resolved_at: datetime | None
+    resolved_by_admin_id: int | None
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
