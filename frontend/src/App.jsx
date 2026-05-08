@@ -2937,11 +2937,6 @@ function AdminDashboard({ token, onAuthExpired }) {
                             label="Download"
                             items={[
                               {
-                                label: 'Exam-wise Marks CSV',
-                                helper: exam?.title ?? `Exam ${submission.exam_id}`,
-                                onSelect: () => exportExamMarksCsv(submission.exam_id),
-                              },
-                              {
                                 label: 'Student Performance CSV',
                                 helper: submission.student_full_name,
                                 onSelect: () => exportStudentPerformanceCsv(submission),

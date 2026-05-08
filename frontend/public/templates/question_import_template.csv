@@ -1,0 +1,2 @@
+question,option1,option2,option3,option4,correct_answer,marks,explanation
+"What protocol assigns IP addresses?","DNS","FTP","DHCP","ARP","DHCP",1,"DHCP assigns addresses."
