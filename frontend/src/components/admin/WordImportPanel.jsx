@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react'
-import { Download, FileText, Loader2, Upload } from 'lucide-react'
+import { FileText, Loader2, Upload } from 'lucide-react'
 
 export function WordImportPanel({ disabled, hasSavedExam, onImport }) {
   const [selectedFile, setSelectedFile] = useState(null)
@@ -31,13 +31,6 @@ export function WordImportPanel({ disabled, hasSavedExam, onImport }) {
           <p className="eyebrow">Word import</p>
           <h3>Import questions from .docx</h3>
         </div>
-      </div>
-
-      <div className="template-actions">
-        <a className="secondary-button" href="/templates/word_question_import_template.docx" download>
-          <Download size={16} aria-hidden="true" />
-          Download Word Template
-        </a>
       </div>
 
       <p className="csv-format">

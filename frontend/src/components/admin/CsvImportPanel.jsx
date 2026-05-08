@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { Download, FileUp } from 'lucide-react'
+import { FileUp } from 'lucide-react'
 import { parseQuestionCsv, questionCsvHeaders } from '../../utils/csv'
 
 export function CsvImportPanel({ disabled, onImport }) {
@@ -46,13 +46,6 @@ export function CsvImportPanel({ disabled, onImport }) {
           <p className="eyebrow">CSV import</p>
           <h3>Import questions into draft</h3>
         </div>
-      </div>
-
-      <div className="template-actions">
-        <a className="secondary-button" href="/templates/question_import_template.csv" download>
-          <Download size={16} aria-hidden="true" />
-          Download CSV Template
-        </a>
       </div>
 
       <div

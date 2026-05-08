@@ -1,5 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { BookOpenCheck, CheckCircle2, FilePlus2, Plus, Rocket, Save } from 'lucide-react'
+import {
+  BookOpenCheck,
+  CheckCircle2,
+  Download,
+  FilePlus2,
+  FileText,
+  FileUp,
+  Plus,
+  Rocket,
+  Save,
+} from 'lucide-react'
 import { CsvImportPanel } from './CsvImportPanel'
 import { QuestionEditor } from './QuestionEditor'
 import { QuestionNavigator } from './QuestionNavigator'
@@ -118,6 +128,7 @@ export function ExamBuilder({
   const [questions, setQuestions] = useState([createEmptyQuestion(0)])
   const [activeIndex, setActiveIndex] = useState(0)
   const [generateCount, setGenerateCount] = useState(10)
+  const [importMode, setImportMode] = useState('csv')
   const [importMessage, setImportMessage] = useState('')
   const questionsRef = useRef(questions)
 
@@ -398,12 +409,54 @@ export function ExamBuilder({
         />
       </div>
 
-      <CsvImportPanel disabled={isSaving} onImport={importQuestions} />
-      <WordImportPanel
-        disabled={isSaving}
-        hasSavedExam={Boolean(selectedExam?.id)}
-        onImport={onImportWord}
-      />
+      <section className="import-tools-card">
+        <div className="section-heading compact">
+          <FilePlus2 size={18} aria-hidden="true" />
+          <div>
+            <p className="eyebrow">Import tools</p>
+            <h3>Import Questions & Templates</h3>
+          </div>
+        </div>
+
+        <div className="import-action-grid" aria-label="Import questions and template actions">
+          <button
+            className={`secondary-button ${importMode === 'csv' ? 'active-import-action' : ''}`}
+            type="button"
+            onClick={() => setImportMode('csv')}
+          >
+            <FileUp size={16} aria-hidden="true" />
+            Import CSV
+          </button>
+          <button
+            className={`secondary-button ${importMode === 'word' ? 'active-import-action' : ''}`}
+            type="button"
+            onClick={() => setImportMode('word')}
+          >
+            <FileText size={16} aria-hidden="true" />
+            Import Word
+          </button>
+          <a className="secondary-button" href="/templates/question_import_template.csv" download>
+            <Download size={16} aria-hidden="true" />
+            Download CSV Template
+          </a>
+          <a className="secondary-button" href="/templates/word_question_import_template.docx" download>
+            <Download size={16} aria-hidden="true" />
+            Download Word Template
+          </a>
+        </div>
+
+        <div className="import-tools-content">
+          {importMode === 'csv' ? (
+            <CsvImportPanel disabled={isSaving} onImport={importQuestions} />
+          ) : (
+            <WordImportPanel
+              disabled={isSaving}
+              hasSavedExam={Boolean(selectedExam?.id)}
+              onImport={onImportWord}
+            />
+          )}
+        </div>
+      </section>
       {importMessage ? <p className="notice success">{importMessage}</p> : null}
       {isPublished ? (
         <p className="notice success">

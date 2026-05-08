@@ -369,6 +369,75 @@ select:focus {
   color: var(--primary);
 }
 
+.action-menu {
+  display: inline-grid;
+  gap: 6px;
+  min-width: 190px;
+}
+
+.action-menu.disabled {
+  opacity: 0.62;
+}
+
+.action-menu-trigger {
+  list-style: none;
+  cursor: pointer;
+}
+
+.action-menu-trigger::-webkit-details-marker {
+  display: none;
+}
+
+.action-menu.disabled .action-menu-trigger {
+  cursor: not-allowed;
+}
+
+.action-menu[open] .action-menu-trigger {
+  border-color: var(--primary);
+}
+
+.action-menu-list {
+  display: grid;
+  gap: 4px;
+  min-width: 230px;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 16px 34px rgba(15, 23, 42, 0.12);
+}
+
+.action-menu-list button {
+  display: grid;
+  gap: 3px;
+  padding: 10px;
+  border: 0;
+  border-radius: 6px;
+  color: var(--ink);
+  background: transparent;
+  text-align: left;
+}
+
+.action-menu-list button:hover:not(:disabled) {
+  color: var(--primary);
+  background: var(--surface-strong);
+}
+
+.action-menu-list button span,
+.action-menu-list button small {
+  display: block;
+}
+
+.action-menu-list button span {
+  font-weight: 900;
+}
+
+.action-menu-list button small {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
 .form-error,
 .notice.error {
   color: var(--danger);
@@ -543,6 +612,94 @@ select:focus {
 
 .metric span {
   color: rgba(255, 255, 255, 0.84);
+}
+
+.dashboard-summary-panel {
+  display: grid;
+  gap: 14px;
+  margin-top: 18px;
+}
+
+.dashboard-metric-row,
+.dashboard-breakdown-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.dashboard-metric-row {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.dashboard-breakdown-grid {
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  margin-top: 12px;
+}
+
+.dashboard-summary-panel .metric {
+  min-width: 0;
+  border-color: var(--line);
+  color: var(--ink);
+  background: #fff;
+}
+
+.dashboard-summary-panel .metric strong {
+  font-size: 1.65rem;
+}
+
+.dashboard-summary-panel .metric span {
+  color: var(--muted);
+}
+
+.dashboard-breakdown-grid .metric {
+  padding: 12px;
+  background: #fbfdfc;
+}
+
+.dashboard-breakdown-grid .metric strong {
+  font-size: 1.3rem;
+}
+
+.dashboard-breakdown-grid .metric span {
+  font-size: 0.82rem;
+}
+
+.dashboard-summary-details {
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.dashboard-summary-details summary {
+  width: fit-content;
+  min-height: 38px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: var(--primary);
+  background: var(--surface-strong);
+  font-size: 0.86rem;
+  font-weight: 900;
+  list-style: none;
+  cursor: pointer;
+}
+
+.dashboard-summary-details summary::-webkit-details-marker {
+  display: none;
+}
+
+.dashboard-summary-details .summary-open {
+  display: none;
+}
+
+.dashboard-summary-details[open] .summary-closed {
+  display: none;
+}
+
+.dashboard-summary-details[open] .summary-open {
+  display: inline;
 }
 
 .content-grid {
@@ -804,6 +961,7 @@ select:focus {
 .navigator-header,
 .csv-preview-header,
 .export-controls,
+.import-action-grid,
 .template-actions,
 .word-import-row {
   display: flex;
@@ -820,6 +978,44 @@ select:focus {
   border: 1px solid var(--line);
   border-radius: 8px;
   background: #fbfdfc;
+}
+
+.import-tools-card {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfdfc;
+}
+
+.import-tools-card .section-heading svg {
+  color: var(--primary);
+}
+
+.import-action-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.import-action-grid > * {
+  width: 100%;
+  min-width: 0;
+}
+
+.active-import-action {
+  border-color: var(--primary);
+  color: var(--primary);
+  background: var(--surface-strong);
+}
+
+.import-tools-content {
+  display: grid;
+  gap: 14px;
+}
+
+.import-tools-content .builder-block {
+  background: #fff;
 }
 
 .template-actions {
@@ -1088,7 +1284,37 @@ select:focus {
 }
 
 .student-history-table {
-  min-width: 1060px;
+  min-width: 760px;
+}
+
+.student-history-detail-row td {
+  background: #f8fafc;
+}
+
+.student-history-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+}
+
+.student-history-detail-grid > div {
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fff;
+}
+
+.student-history-detail-grid span {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.student-history-detail-grid strong {
+  overflow-wrap: anywhere;
 }
 
 .modal-close {
@@ -1870,6 +2096,40 @@ select:focus {
   gap: 18px;
 }
 
+.results-heading-stack {
+  display: grid;
+  gap: 14px;
+}
+
+.results-heading-stack .section-heading {
+  margin-bottom: 0;
+}
+
+.results-export-card {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.results-export-card h3 {
+  margin: 0;
+}
+
+.results-export-controls {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(180px, auto);
+  gap: 12px;
+  align-items: center;
+}
+
+.results-export-controls .action-menu,
+.results-export-controls .action-menu-trigger {
+  width: 100%;
+}
+
 .results-filter-bar {
   display: grid;
   grid-template-columns: minmax(220px, 1fr) minmax(280px, 1.2fr) minmax(160px, auto) minmax(210px, auto);
@@ -1905,6 +2165,34 @@ select:focus {
   width: 100%;
   min-width: 1240px;
   border-collapse: collapse;
+}
+
+.submission-results-table {
+  min-width: 1060px;
+}
+
+.submission-results-table th,
+.submission-results-table td {
+  padding: 10px 11px;
+}
+
+.submission-results-table .table-actions {
+  gap: 6px;
+}
+
+.submission-results-table .secondary-button,
+.submission-results-table .action-menu-trigger {
+  min-height: 38px;
+  padding: 0 10px;
+  font-size: 0.82rem;
+}
+
+.submission-results-table .action-menu {
+  min-width: 145px;
+}
+
+.submission-results-table .action-menu-list {
+  min-width: 210px;
 }
 
 .activity-table {
@@ -2101,9 +2389,11 @@ select:focus {
   .builder-two-column,
   .builder-three-column,
   .generation-row,
+  .import-action-grid,
   .builder-workspace,
   .exam-attempt-grid,
   .export-controls,
+  .results-export-controls,
   .results-filter-bar,
   .activity-filter-bar {
     grid-template-columns: 1fr;
@@ -2132,6 +2422,14 @@ select:focus {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     width: 100%;
+  }
+
+  .dashboard-metric-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .dashboard-breakdown-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .metric {
@@ -2184,6 +2482,7 @@ select:focus {
 
   .results-filter-bar select,
   .activity-filter-bar select,
+  .results-export-controls select,
   .export-controls select {
     width: 100%;
   }
@@ -2193,10 +2492,18 @@ select:focus {
   .template-actions > *,
   .word-import-row > *,
   .export-controls > *,
+  .results-export-controls > *,
   .table-actions > *,
   .modal-actions > *,
   .answer-actions > * {
     flex: 1 1 180px;
+  }
+
+  .action-menu,
+  .action-menu-trigger,
+  .action-menu-list {
+    width: 100%;
+    min-width: 0;
   }
 
   .inline-reset-form > * {
@@ -2364,6 +2671,7 @@ select:focus {
   .word-import-row,
   .csv-preview-header,
   .export-controls,
+  .results-export-controls,
   .table-actions,
   .modal-actions,
   .answer-actions,
@@ -2376,11 +2684,19 @@ select:focus {
   .template-actions > *,
   .word-import-row > *,
   .export-controls > *,
+  .results-export-controls > *,
   .table-actions > *,
   .modal-actions > *,
   .answer-actions > * {
     flex: 1 1 calc(50% - 10px);
     min-width: 140px;
+  }
+
+  .action-menu,
+  .action-menu-trigger,
+  .action-menu-list {
+    width: 100%;
+    min-width: 0;
   }
 
   .inline-reset-form label,
@@ -2690,6 +3006,7 @@ select:focus {
   .csv-row-preview,
   .word-import-row,
   .details-band,
+  .results-export-card,
   .question-stack,
   .question-panel,
   .option-grid,
@@ -2734,6 +3051,9 @@ select:focus {
   .builder-topbar,
   .generation-row,
   .builder-actions,
+  .import-tools-card,
+  .import-tools-content,
+  .import-action-grid,
   .template-actions,
   .word-import-row,
   .question-editor .answer-actions,
@@ -2750,6 +3070,8 @@ select:focus {
   }
 
   .builder-actions,
+  .import-tools-content,
+  .import-action-grid,
   .template-actions,
   .question-editor .answer-actions,
   .csv-preview-header {
@@ -2922,6 +3244,7 @@ select:focus {
   .template-actions > *,
   .word-import-row > *,
   .export-controls > *,
+  .results-export-controls > *,
   .table-actions > *,
   .modal-actions > *,
   .answer-actions > * {

@@ -1,8 +1,9 @@
-import { createElement, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, createElement, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertTriangle,
   Archive,
   BookOpenCheck,
+  ChevronDown,
   CheckCircle2,
   ClipboardList,
   Download,
@@ -1583,6 +1584,8 @@ function AdminDashboard({ token, onAuthExpired }) {
       published_exams: summary?.published_exams ?? exams.filter((exam) => exam.is_published && !exam.is_archived).length,
       draft_exams: summary?.draft_exams ?? exams.filter((exam) => !exam.is_published && !exam.is_archived).length,
       archived_exams: summary?.archived_exams ?? exams.filter((exam) => exam.is_archived).length,
+      result_published_exams:
+        summary?.result_published_exams ?? exams.filter((exam) => exam.is_result_published && !exam.is_archived).length,
       total_students: summary?.total_students ?? users.filter((user) => user.role === 'student').length,
       total_admins: summary?.total_admins ?? users.filter((user) => user.role === 'admin').length,
       total_submissions: summary?.total_submissions ?? submissions.length,
@@ -2242,8 +2245,8 @@ function AdminDashboard({ token, onAuthExpired }) {
     })
   }
 
-  async function downloadStudentHistoryCsv() {
-    const studentId = studentHistoryState.student?.id ?? studentHistoryState.history[0]?.student_id
+  async function downloadStudentHistoryCsv(studentOverride = null) {
+    const studentId = studentOverride?.id ?? studentHistoryState.student?.id ?? studentHistoryState.history[0]?.student_id
     if (!studentId) return
 
     setStatus({ loading: true, error: '', success: '' })
@@ -2274,8 +2277,8 @@ function AdminDashboard({ token, onAuthExpired }) {
     }
   }
 
-  async function exportExamMarksCsv() {
-    const examId = Number(resultExportExamId)
+  async function exportExamMarksCsv(examIdOverride = resultExportExamId) {
+    const examId = Number(examIdOverride)
     const exam = examById.get(examId)
     if (!exam) {
       setStatus({ loading: false, error: 'Select an exam before downloading marks.', success: '' })
@@ -2428,19 +2431,33 @@ function AdminDashboard({ token, onAuthExpired }) {
           <h1>Exam management</h1>
           <p>Create, import, review submissions, and investigate suspicious activity.</p>
         </div>
-        <div className="metric-row">
-          <Metric label="Exams" value={dashboardSummary.total_exams} />
-          <Metric label="Published" value={dashboardSummary.published_exams} />
-          <Metric label="Drafts" value={dashboardSummary.draft_exams} />
-          <Metric label="Students" value={dashboardSummary.total_students} />
-          <Metric label="Admins" value={dashboardSummary.total_admins} />
-          <Metric label="Submissions" value={dashboardSummary.total_submissions} />
-          <Metric label="Critical alerts" value={unresolvedCriticalAlerts.length} />
-          <Metric
-            label="Average score"
-            value={dashboardSummary.average_score === null ? '-' : dashboardSummary.average_score.toFixed(1)}
-          />
+      </section>
+
+      <section className="dashboard-summary-panel" aria-label="Dashboard summary">
+        <div className="dashboard-metric-row">
+          <Metric label="Total Exams" value={dashboardSummary.total_exams} />
+          <Metric label="Total Students" value={dashboardSummary.total_students} />
+          <Metric label="Total Submissions" value={dashboardSummary.total_submissions} />
+          <Metric label="Security Alerts" value={unresolvedSecurityAlerts.length} />
         </div>
+        <details className="dashboard-summary-details">
+          <summary>
+            <span className="summary-closed">Show breakdown</span>
+            <span className="summary-open">Hide breakdown</span>
+          </summary>
+          <div className="dashboard-breakdown-grid">
+            <Metric label="Published" value={dashboardSummary.published_exams} />
+            <Metric label="Drafts" value={dashboardSummary.draft_exams} />
+            <Metric label="Archived" value={dashboardSummary.archived_exams} />
+            <Metric label="Results Published" value={dashboardSummary.result_published_exams} />
+            <Metric label="Admins" value={dashboardSummary.total_admins} />
+            <Metric label="Critical Alerts" value={unresolvedCriticalAlerts.length} />
+            <Metric
+              label="Average Score"
+              value={dashboardSummary.average_score === null ? '-' : dashboardSummary.average_score.toFixed(1)}
+            />
+          </div>
+        </details>
       </section>
 
       {status.error ? <p className="notice error">{status.error}</p> : null}
@@ -2788,30 +2805,35 @@ function AdminDashboard({ token, onAuthExpired }) {
 
       {activeTab === 'results' ? (
         <section className="details-band results-workspace">
-          <div className="panel-title-row">
+          <div className="results-heading-stack">
             <SectionTitle icon={Flag} eyebrow="Results" title="Submission results" />
-            <div className="table-actions">
-              <select
-                value={resultExportExamId}
-                onChange={(event) => setResultExportExamId(event.target.value)}
-                aria-label="Exam for marks CSV"
-              >
-                <option value="">Select exam for marks CSV</option>
-                {exams.map((exam) => (
-                  <option value={exam.id} key={exam.id}>
-                    {exam.title}
-                  </option>
-                ))}
-              </select>
-              <button
-                className="primary-button"
-                type="button"
-                onClick={exportExamMarksCsv}
-                disabled={!resultExportExamId}
-              >
-                <Download size={16} aria-hidden="true" />
-                Download Exam Marks CSV
-              </button>
+            <div className="results-export-card">
+              <h3>Results Export</h3>
+              <div className="results-export-controls">
+                <select
+                  value={resultExportExamId}
+                  onChange={(event) => setResultExportExamId(event.target.value)}
+                  aria-label="Exam for marks CSV"
+                >
+                  <option value="">Select exam for marks CSV</option>
+                  {exams.map((exam) => (
+                    <option value={exam.id} key={exam.id}>
+                      {exam.title}
+                    </option>
+                  ))}
+                </select>
+                <DownloadResultsMenu
+                  variant="primary"
+                  items={[
+                    {
+                      label: 'Exam-wise Marks CSV',
+                      helper: 'Uses the selected exam above.',
+                      disabled: !resultExportExamId,
+                      onSelect: () => exportExamMarksCsv(),
+                    },
+                  ]}
+                />
+              </div>
             </div>
           </div>
 
@@ -2855,18 +2877,18 @@ function AdminDashboard({ token, onAuthExpired }) {
           </div>
 
           <div className="results-table-wrap">
-            <table className="results-table">
+            <table className="results-table submission-results-table">
               <thead>
                 <tr>
                   <th>Exam title</th>
                   <th>Student name</th>
-                  <th>Register number</th>
-                  <th>Department</th>
+                  <th>Register No.</th>
+                  <th>Dept.</th>
                   <th>Year</th>
                   <th>Score</th>
-                  <th>Submission status</th>
-                  <th>Submitted time</th>
-                  <th>Result status</th>
+                  <th>Status</th>
+                  <th>Submitted</th>
+                  <th>Result</th>
                   <th>Integrity</th>
                   <th>Actions</th>
                 </tr>
@@ -2906,19 +2928,31 @@ function AdminDashboard({ token, onAuthExpired }) {
                           <button
                             className="secondary-button"
                             type="button"
-                            onClick={() => exportStudentPerformanceCsv(submission)}
-                          >
-                            <Download size={16} aria-hidden="true" />
-                            Performance
-                          </button>
-                          <button
-                            className="secondary-button"
-                            type="button"
                             onClick={() => openStudentExamHistory(studentFromSubmission(submission))}
                           >
                             <Flag size={16} aria-hidden="true" />
                             Student History
                           </button>
+                          <DownloadResultsMenu
+                            label="Download"
+                            items={[
+                              {
+                                label: 'Exam-wise Marks CSV',
+                                helper: exam?.title ?? `Exam ${submission.exam_id}`,
+                                onSelect: () => exportExamMarksCsv(submission.exam_id),
+                              },
+                              {
+                                label: 'Student Performance CSV',
+                                helper: submission.student_full_name,
+                                onSelect: () => exportStudentPerformanceCsv(submission),
+                              },
+                              {
+                                label: 'Student Exam History CSV',
+                                helper: submission.student_full_name,
+                                onSelect: () => downloadStudentHistoryCsv(studentFromSubmission(submission)),
+                              },
+                            ]}
+                          />
                         </div>
                       </td>
                     </tr>
@@ -3166,6 +3200,7 @@ function StudentExamHistoryModal({ historyState, onClose, onDownload }) {
       : null
   const passCount = historyState.history.filter((item) => item.pass_fail === 'Pass').length
   const failCount = historyState.history.filter((item) => item.pass_fail === 'Fail').length
+  const [expandedHistoryId, setExpandedHistoryId] = useState(null)
 
   return (
     <div className="modal-backdrop" role="presentation">
@@ -3181,15 +3216,17 @@ function StudentExamHistoryModal({ historyState, onClose, onDownload }) {
 
         <div className="panel-title-row student-history-heading">
           <SectionTitle icon={Flag} eyebrow="Student" title="Student Exam History" />
-          <button
-            className="primary-button"
-            type="button"
-            onClick={onDownload}
-            disabled={historyState.loading || historyState.history.length === 0}
-          >
-            <Download size={16} aria-hidden="true" />
-            Download Student Exam History CSV
-          </button>
+          <DownloadResultsMenu
+            variant="primary"
+            items={[
+              {
+                label: 'Student Exam History CSV',
+                helper: 'Exports the full history data.',
+                disabled: historyState.loading || historyState.history.length === 0,
+                onSelect: onDownload,
+              },
+            ]}
+          />
         </div>
 
         {historyState.loading ? <LoadingBlock label="Loading student exam history" /> : null}
@@ -3232,37 +3269,94 @@ function StudentExamHistoryModal({ historyState, onClose, onDownload }) {
                 <table className="results-table student-history-table">
                   <thead>
                     <tr>
-                      <th>Exam title</th>
-                      <th>Subject</th>
-                      <th>Status</th>
+                      <th>Exam</th>
                       <th>Score</th>
-                      <th>Total marks</th>
-                      <th>Percentage</th>
-                      <th>Pass/Fail</th>
-                      <th>Submitted time</th>
-                      <th>Result published</th>
+                      <th>Result</th>
+                      <th>Submitted At</th>
                       <th>Integrity</th>
+                      <th>Actions</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {historyState.history.map((item) => (
-                      <tr key={item.submission_id}>
-                        <td>{item.exam_title}</td>
-                        <td>{item.exam_subject ?? '-'}</td>
-                        <td>{item.status}</td>
-                        <td>{item.score ?? '-'}</td>
-                        <td>{item.total_marks}</td>
-                        <td>{item.percentage !== null && item.percentage !== undefined ? `${item.percentage}%` : '-'}</td>
-                        <td>{item.pass_fail}</td>
-                        <td>{formatDateTime(item.submitted_at)}</td>
-                        <td>{item.is_result_published ? 'Yes' : 'No'}</td>
-                        <td>
-                          <span className={`integrity-pill ${getIntegrityStatusClass(item.integrity_status)}`}>
-                            {formatIntegrityStatus(item.integrity_status)}
-                          </span>
-                        </td>
-                      </tr>
-                    ))}
+                    {historyState.history.map((item, index) => {
+                      const historyId = item.submission_id ?? `${item.exam_title}-${item.submitted_at ?? index}`
+                      const isExpanded = expandedHistoryId === historyId
+                      const isResultPublished = Boolean(item.is_result_published ?? item.result_published)
+                      return (
+                        <Fragment key={historyId}>
+                          <tr>
+                            <td>
+                              <strong>{item.exam_title}</strong>
+                              <span>{item.exam_subject ?? '-'}</span>
+                            </td>
+                            <td>{item.score ?? '-'}</td>
+                            <td>{item.pass_fail || formatActivityAction(item.status) || '-'}</td>
+                            <td>{formatDateTime(item.submitted_at)}</td>
+                            <td>
+                              <span className={`integrity-pill ${getIntegrityStatusClass(item.integrity_status)}`}>
+                                {formatIntegrityStatus(item.integrity_status)}
+                              </span>
+                            </td>
+                            <td>
+                              <button
+                                className="secondary-button"
+                                type="button"
+                                onClick={() => setExpandedHistoryId(isExpanded ? null : historyId)}
+                              >
+                                <Eye size={16} aria-hidden="true" />
+                                {isExpanded ? 'Hide Details' : 'View Details'}
+                              </button>
+                            </td>
+                          </tr>
+                          {isExpanded ? (
+                            <tr className="student-history-detail-row">
+                              <td colSpan={6}>
+                                <div className="student-history-detail-grid">
+                                  <div>
+                                    <span>Subject</span>
+                                    <strong>{item.exam_subject ?? '-'}</strong>
+                                  </div>
+                                  <div>
+                                    <span>Submission Status</span>
+                                    <strong>{item.status ?? '-'}</strong>
+                                  </div>
+                                  <div>
+                                    <span>Total Marks</span>
+                                    <strong>{item.total_marks ?? '-'}</strong>
+                                  </div>
+                                  <div>
+                                    <span>Percentage</span>
+                                    <strong>
+                                      {item.percentage !== null && item.percentage !== undefined ? `${item.percentage}%` : '-'}
+                                    </strong>
+                                  </div>
+                                  <div>
+                                    <span>Result Published</span>
+                                    <strong>{isResultPublished ? 'Yes' : 'No'}</strong>
+                                  </div>
+                                  <div>
+                                    <span>Started At</span>
+                                    <strong>{formatDateTime(item.started_at)}</strong>
+                                  </div>
+                                  <div>
+                                    <span>Register Number</span>
+                                    <strong>{item.register_number ?? '-'}</strong>
+                                  </div>
+                                  <div>
+                                    <span>Department</span>
+                                    <strong>{item.department ?? '-'}</strong>
+                                  </div>
+                                  <div>
+                                    <span>Year</span>
+                                    <strong>{item.year ?? '-'}</strong>
+                                  </div>
+                                </div>
+                              </td>
+                            </tr>
+                          ) : null}
+                        </Fragment>
+                      )
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -3362,10 +3456,15 @@ function SubmissionDetailModal({
 
             <div className="panel-title-row">
               <h3 id="submission-detail-title">Question-wise answers</h3>
-              <button className="secondary-button" type="button" onClick={() => onDownload(submission)}>
-                <Download size={16} aria-hidden="true" />
-                Download Student Performance
-              </button>
+              <DownloadResultsMenu
+                items={[
+                  {
+                    label: 'Student Performance CSV',
+                    helper: submission.student_full_name,
+                    onSelect: () => onDownload(submission),
+                  },
+                ]}
+              />
             </div>
 
             <div className="answer-review-grid">
@@ -3494,6 +3593,47 @@ function Metric({ label, value }) {
       <strong>{value}</strong>
       <span>{label}</span>
     </div>
+  )
+}
+
+function DownloadResultsMenu({ items, variant = 'secondary', label = 'Download Results' }) {
+  const isDisabled = items.every((item) => item.disabled)
+  const triggerClass = `${variant === 'primary' ? 'primary-button' : 'secondary-button'} action-menu-trigger`
+
+  function handleSelect(event, item) {
+    event.currentTarget.closest('details')?.removeAttribute('open')
+    item.onSelect()
+  }
+
+  return (
+    <details className={`action-menu ${isDisabled ? 'disabled' : ''}`}>
+      <summary
+        className={triggerClass}
+        aria-disabled={isDisabled}
+        onClick={(event) => {
+          if (isDisabled) {
+            event.preventDefault()
+          }
+        }}
+      >
+        <Download size={16} aria-hidden="true" />
+        {label}
+        <ChevronDown size={15} aria-hidden="true" />
+      </summary>
+      <div className="action-menu-list">
+        {items.map((item) => (
+          <button
+            type="button"
+            key={item.label}
+            onClick={(event) => handleSelect(event, item)}
+            disabled={item.disabled}
+          >
+            <span>{item.label}</span>
+            {item.helper ? <small>{item.helper}</small> : null}
+          </button>
+        ))}
+      </div>
+    </details>
   )
 }
 
