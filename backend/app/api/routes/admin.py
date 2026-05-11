@@ -21,6 +21,7 @@ from app.schemas.admin import (
 from app.services.admin_activity_service import list_admin_activity, log_admin_activity
 from app.services.backup_service import generate_database_backup
 from app.services.exam_service import get_student_exam_history
+from app.services.integrity_service import verify_submission_integrity
 from app.services.security_alert_service import list_security_alerts, resolve_security_alert
 from app.utils.enums import SubmissionStatus, UserRole
 
