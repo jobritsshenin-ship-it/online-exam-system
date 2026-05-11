@@ -48,6 +48,23 @@ const YEAR_OPTIONS = ['1st Year', '2nd Year', '3rd Year', '4th Year']
 const STUDENT_REGISTER_NUMBER_PATTERN = /^9635\d{8}$/
 const STUDENT_REGISTER_NUMBER_HELP = 'Register number must be a 12-digit number starting with 9635.'
 const KEYBOARD_VIOLATION_COOLDOWN_MS = 3000
+const PROCTOR_EVENT_LABELS = {
+  window_blur: 'Window switched / lost focus',
+  tab_hidden: 'Tab switched / hidden',
+  fullscreen_exit: 'Fullscreen exited',
+  keyboard_violation: 'Suspicious key / shortcut',
+  auto_submit: 'Auto-submitted',
+  copy: 'Copy attempt detected',
+  paste: 'Paste attempt detected',
+  cut: 'Cut attempt detected',
+  contextmenu: 'Context menu attempt',
+  page_unload: 'Page refresh/close attempt',
+  route_leave: 'Exam page leave attempt',
+  logout_during_exam: 'Logout during exam',
+  timer_expired: 'Timer expired',
+  manual_security_lock: 'Manual security lock',
+  reopen_attempt: 'Exam reopen attempt',
+}
 
 const createEmptyCredentials = () => ({
   email: '',
@@ -365,6 +382,108 @@ function formatActivityAction(value) {
     .filter(Boolean)
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(' ')
+}
+
+function formatProctorEventLabel(eventType) {
+  return PROCTOR_EVENT_LABELS[eventType] ?? formatActivityAction(eventType)
+}
+
+function formatProctorEventDetails(event) {
+  const details = String(event?.details ?? '').trim()
+  if (!details) return ''
+  return PROCTOR_EVENT_LABELS[details] ?? details
+}
+
+function getSortedProctorEvents(events = []) {
+  return [...events].sort((first, second) => {
+    const firstTime = new Date(first.created_at ?? 0).getTime()
+    const secondTime = new Date(second.created_at ?? 0).getTime()
+    return firstTime - secondTime
+  })
+}
+
+function getAutoSubmitReason(event) {
+  const detail = String(event?.details ?? '').toLowerCase()
+  if (detail.includes('timer_expired') || detail.includes('timer expired') || detail.includes('time expired')) {
+    return 'timer_expired'
+  }
+  return event?.event_type === 'auto_submit' ? 'security' : ''
+}
+
+function getEventImportance(event) {
+  if (event.event_type === 'auto_submit' && getAutoSubmitReason(event) !== 'timer_expired') return 5
+  if (event.severity === 'critical') return 4
+  if (event.event_type === 'keyboard_violation') return 3
+  if (['fullscreen_exit', 'tab_hidden', 'window_blur', 'route_leave', 'page_unload'].includes(event.event_type)) return 2
+  return 1
+}
+
+function getSubmissionRiskSummary(submissionOrEvents) {
+  const events = Array.isArray(submissionOrEvents)
+    ? submissionOrEvents
+    : submissionOrEvents?.events ?? []
+  const sortedEvents = getSortedProctorEvents(events)
+  const totalCount = sortedEvents.length
+  const criticalCount = sortedEvents.filter((event) => event.severity === 'critical').length
+  const keyboardViolationCount = sortedEvents.filter((event) => event.event_type === 'keyboard_violation').length
+  const autoSubmitCount = sortedEvents.filter((event) => event.event_type === 'auto_submit').length
+  const suspiciousAutoSubmitCount = sortedEvents.filter(
+    (event) => event.event_type === 'auto_submit' && getAutoSubmitReason(event) !== 'timer_expired',
+  ).length
+  const topEvent = sortedEvents
+    .slice()
+    .sort((first, second) => getEventImportance(second) - getEventImportance(first))[0]
+  let riskLevel = 'none'
+
+  if (totalCount === 0) {
+    riskLevel = 'none'
+  } else if (suspiciousAutoSubmitCount > 0 || criticalCount > 1) {
+    riskLevel = 'critical'
+  } else if (criticalCount > 0 || keyboardViolationCount > 0) {
+    riskLevel = 'warning'
+  } else {
+    riskLevel = 'low'
+  }
+
+  const flagLabel = totalCount === 1 ? '1 flag' : `${totalCount} flags`
+  const criticalLabel = criticalCount === 1 ? '1 critical flag' : `${criticalCount} critical flags`
+
+  return {
+    totalCount,
+    criticalCount,
+    keyboardViolationCount,
+    autoSubmitCount,
+    suspiciousAutoSubmitCount,
+    riskLevel,
+    riskLabel: riskLevel === 'none' ? 'No flags' : formatActivityAction(riskLevel),
+    flagLabel,
+    criticalLabel,
+    topEvent,
+    topEventLabel: topEvent ? formatProctorEventLabel(topEvent.event_type) : '',
+    events: sortedEvents,
+  }
+}
+
+function parseEventMetadata(metadataJson) {
+  if (!metadataJson) return { metadata: null, raw: '' }
+  try {
+    const parsed = JSON.parse(metadataJson)
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return { metadata: parsed, raw: '' }
+    }
+    return { metadata: null, raw: String(parsed) }
+  } catch {
+    return { metadata: null, raw: metadataJson }
+  }
+}
+
+function formatEventModifiers(metadata) {
+  const modifiers = []
+  if (metadata?.ctrlKey) modifiers.push('Ctrl')
+  if (metadata?.altKey) modifiers.push('Alt')
+  if (metadata?.shiftKey) modifiers.push('Shift')
+  if (metadata?.metaKey) modifiers.push('Meta')
+  return modifiers.join(' + ')
 }
 
 function formatActivityDetailValue(value) {
@@ -1719,6 +1838,13 @@ function AdminDashboard({ token, user, onAuthExpired }) {
     student: null,
     history: [],
   })
+  const [activityTimelineState, setActivityTimelineState] = useState({
+    isOpen: false,
+    loading: false,
+    error: '',
+    submission: null,
+    exam: null,
+  })
   const isPersistingDraftRef = useRef(false)
 
   const dashboardSummary = useMemo(() => {
@@ -2383,6 +2509,46 @@ function AdminDashboard({ token, user, onAuthExpired }) {
       loading: false,
       error: '',
       submission: null,
+    })
+  }
+
+  async function openSubmissionActivity(submission, exam) {
+    setActivityTimelineState({
+      isOpen: true,
+      loading: true,
+      error: '',
+      submission,
+      exam,
+    })
+    try {
+      const detail = await apiRequest(`/exams/submissions/${submission.id}`, { token })
+      replaceSubmissionInState(detail)
+      setActivityTimelineState({
+        isOpen: true,
+        loading: false,
+        error: '',
+        submission: detail,
+        exam: examById.get(detail.exam_id) ?? exam,
+      })
+    } catch (err) {
+      if (handleAuthenticatedError(err, onAuthExpired)) return
+      setActivityTimelineState({
+        isOpen: true,
+        loading: false,
+        error: err.message,
+        submission,
+        exam,
+      })
+    }
+  }
+
+  function closeSubmissionActivity() {
+    setActivityTimelineState({
+      isOpen: false,
+      loading: false,
+      error: '',
+      submission: null,
+      exam: null,
     })
   }
 
@@ -3082,6 +3248,7 @@ function AdminDashboard({ token, user, onAuthExpired }) {
                   const hasScore = submission.score !== null && submission.score !== undefined
                   const isSubmitted = submission.status === 'submitted'
                   const isResultPublished = Boolean(exam?.is_result_published)
+                  const riskSummary = getSubmissionRiskSummary(submission)
                   return (
                     <tr key={submission.id}>
                       <td data-label="Student & Exam">
@@ -3120,6 +3287,7 @@ function AdminDashboard({ token, user, onAuthExpired }) {
                           <span className={`integrity-pill ${getIntegrityStatusClass(submission.integrity_status)}`}>
                             {formatIntegrityStatus(submission.integrity_status)}
                           </span>
+                          <RiskCompactSummary summary={riskSummary} />
                         </div>
                       </td>
                       <td data-label="Actions">
@@ -3139,6 +3307,14 @@ function AdminDashboard({ token, user, onAuthExpired }) {
                           >
                             <Flag size={16} aria-hidden="true" />
                             Student History
+                          </button>
+                          <button
+                            className="secondary-button"
+                            type="button"
+                            onClick={() => openSubmissionActivity(submission, exam)}
+                          >
+                            <AlertTriangle size={16} aria-hidden="true" />
+                            View Activity
                           </button>
                           <DownloadResultsMenu
                             label="Download"
@@ -3336,6 +3512,14 @@ function AdminDashboard({ token, user, onAuthExpired }) {
           historyState={studentHistoryState}
           onClose={closeStudentHistory}
           onDownload={downloadStudentHistoryCsv}
+        />
+      ) : null}
+
+      {activityTimelineState.isOpen ? (
+        <SubmissionActivityModal
+          activityState={activityTimelineState}
+          onClose={closeSubmissionActivity}
+          getStudentYear={getStudentYear}
         />
       ) : null}
 
@@ -3597,6 +3781,122 @@ function StudentExamHistoryModal({ historyState, onClose, onDownload }) {
   )
 }
 
+function RiskLevelBadge({ summary }) {
+  return (
+    <span className={`risk-pill ${summary.riskLevel}`}>
+      {summary.riskLabel}
+    </span>
+  )
+}
+
+function RiskCompactSummary({ summary }) {
+  if (summary.totalCount === 0) {
+    return (
+      <div className="risk-compact">
+        <RiskLevelBadge summary={summary} />
+      </div>
+    )
+  }
+
+  const countLabel = summary.criticalCount > 0 ? summary.criticalLabel : summary.flagLabel
+
+  return (
+    <div className={`risk-compact ${summary.riskLevel}`}>
+      <RiskLevelBadge summary={summary} />
+      <span>{countLabel}</span>
+      <small>{summary.topEventLabel}</small>
+    </div>
+  )
+}
+
+function SuspiciousActivitySummary({ summary, timelineHref }) {
+  if (summary.totalCount === 0) {
+    return (
+      <div className="suspicious-summary no-risk">
+        <div>
+          <h3>Suspicious Activity Summary</h3>
+          <p>No suspicious activity recorded.</p>
+        </div>
+        <RiskLevelBadge summary={summary} />
+      </div>
+    )
+  }
+
+  return (
+    <div className={`suspicious-summary ${summary.riskLevel}`}>
+      <div>
+        <h3>Suspicious Activity Summary</h3>
+        <div className="suspicious-summary-line">
+          <RiskLevelBadge summary={summary} />
+          <strong>{summary.flagLabel}</strong>
+          {summary.criticalCount > 0 ? <span>{summary.criticalLabel}</span> : null}
+        </div>
+        <p>Top issue: {summary.topEventLabel}</p>
+        <div className="suspicious-summary-metrics">
+          <span>{summary.keyboardViolationCount} keyboard</span>
+          <span>{summary.autoSubmitCount} auto-submit</span>
+        </div>
+      </div>
+      {timelineHref ? (
+        <a className="secondary-button" href={timelineHref}>
+          View activity timeline
+        </a>
+      ) : null}
+    </div>
+  )
+}
+
+function SubmissionActivityModal({ activityState, onClose, getStudentYear }) {
+  const submission = activityState.submission
+  const summary = getSubmissionRiskSummary(submission)
+  const examTitle = activityState.exam?.title ?? (submission ? `Exam ${submission.exam_id}` : 'Exam')
+
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <div className="modal-panel activity-timeline-modal" role="dialog" aria-modal="true" aria-labelledby="activity-timeline-title">
+        <button
+          className="icon-button modal-close"
+          type="button"
+          onClick={onClose}
+          aria-label="Close activity timeline"
+        >
+          <X size={18} aria-hidden="true" />
+        </button>
+
+        <SectionTitle icon={AlertTriangle} eyebrow="Proctoring" title="Activity timeline" />
+
+        {activityState.loading ? <LoadingBlock label="Loading activity timeline" /> : null}
+        {activityState.error ? <p className="notice error">{activityState.error}</p> : null}
+
+        {submission ? (
+          <>
+            <div className="activity-submission-header" id="activity-timeline-title">
+              <div>
+                <span>Student</span>
+                <strong>{formatStudentName(submission.student_full_name)}</strong>
+                <small>{submission.student_email}</small>
+              </div>
+              <div>
+                <span>Exam</span>
+                <strong>{examTitle}</strong>
+                <small>{getStudentYear(submission) || '-'}</small>
+              </div>
+            </div>
+
+            <SuspiciousActivitySummary summary={summary} />
+
+            {summary.totalCount > 0 ? (
+              <ProctorEventList events={summary.events} />
+            ) : (
+              <p className="empty-state">No suspicious activity recorded for this submission.</p>
+            )}
+          </>
+        ) : null}
+      </div>
+    </div>
+  )
+}
+
 function SubmissionDetailModal({
   detailState,
   exam,
@@ -3607,6 +3907,7 @@ function SubmissionDetailModal({
 }) {
   const submission = detailState.submission
   const totalMarks = exam?.questions?.reduce((total, question) => total + Number(question.marks || 0), 0) ?? 0
+  const riskSummary = getSubmissionRiskSummary(submission)
 
   return (
     <div className="modal-backdrop" role="presentation">
@@ -3627,6 +3928,11 @@ function SubmissionDetailModal({
 
         {!detailState.loading && !detailState.error && submission ? (
           <>
+            <SuspiciousActivitySummary
+              summary={riskSummary}
+              timelineHref={riskSummary.totalCount > 0 ? '#submission-proctor-events' : ''}
+            />
+
             <div className="submission-detail-grid">
               <div>
                 <span>Student name</span>
@@ -3682,7 +3988,7 @@ function SubmissionDetailModal({
             ) : null}
 
             {(submission.events ?? []).length > 0 ? (
-              <div className="cheat-panel">
+              <div className="cheat-panel" id="submission-proctor-events">
                 <AlertTriangle size={18} aria-hidden="true" />
                 <div>
                   <strong>Proctoring events</strong>
@@ -3813,12 +4119,15 @@ function ProctorEventList({ events }) {
     return <p>No detailed proctoring events were returned for this submission.</p>
   }
 
+  const sortedEvents = getSortedProctorEvents(events)
+
   return (
     <div className="proctor-event-list">
-      {events.map((event) => (
+      {sortedEvents.map((event) => (
         <div className="proctor-event-item" key={event.id}>
-          <strong>{formatActivityAction(event.event_type)}</strong>
-          {event.details ? <span>{event.details}</span> : null}
+          <strong>{formatProctorEventLabel(event.event_type)}</strong>
+          {formatProctorEventDetails(event) ? <span>{formatProctorEventDetails(event)}</span> : null}
+          <EventMetadataDetails event={event} />
           <small>
             Severity: {formatActivityAction(event.severity)} | Time: {formatDateTime(event.created_at)}
           </small>
@@ -3826,6 +4135,41 @@ function ProctorEventList({ events }) {
       ))}
     </div>
   )
+}
+
+function EventMetadataDetails({ event }) {
+  const { metadata, raw } = parseEventMetadata(event.metadata_json)
+
+  if (raw) {
+    return <small className="event-metadata-raw">{raw}</small>
+  }
+
+  if (!metadata) return null
+
+  if (event.event_type === 'keyboard_violation') {
+    const modifiers = formatEventModifiers(metadata)
+    return (
+      <div className="event-metadata-grid">
+        {metadata.key ? (
+          <span>
+            <b>Key:</b> {metadata.key}
+          </span>
+        ) : null}
+        {metadata.code ? (
+          <span>
+            <b>Code:</b> {metadata.code}
+          </span>
+        ) : null}
+        {modifiers ? (
+          <span>
+            <b>Modifiers:</b> {modifiers}
+          </span>
+        ) : null}
+      </div>
+    )
+  }
+
+  return null
 }
 
 function SectionTitle({ icon, eyebrow, title }) {
