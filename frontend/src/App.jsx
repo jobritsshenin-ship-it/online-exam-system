@@ -3979,16 +3979,6 @@ function SubmissionDetailModal({
               </div>
             ) : null}
 
-            {(submission.events ?? []).length > 0 ? (
-              <div className="cheat-panel" id="submission-proctor-events">
-                <AlertTriangle size={18} aria-hidden="true" />
-                <div>
-                  <strong>Proctoring events</strong>
-                  <ProctorEventList events={submission.events} />
-                </div>
-              </div>
-            ) : null}
-
             <div className="panel-title-row">
               <h3 id="submission-detail-title">Question-wise answers</h3>
               <DownloadResultsMenu
