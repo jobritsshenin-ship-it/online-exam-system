@@ -29,7 +29,7 @@ from app.services.integrity_service import seal_submission_integrity, verify_sub
 from app.utils.enums import QuestionType, SubmissionStatus, UserRole
 
 
-PASS_THRESHOLD_MARKS = 50
+PASS_THRESHOLD_PERCENTAGE = 50
 
 
 def _exam_options():
@@ -1020,12 +1020,13 @@ def _get_history_status(submission: Submission) -> str:
     return "Submitted"
 
 
-def _get_history_pass_fail(submission: Submission) -> str:
+def _get_history_pass_fail(submission: Submission, total_marks: int) -> str:
     if submission.status == SubmissionStatus.IN_PROGRESS:
         return "In Progress"
-    if submission.score is None:
+    if submission.score is None or total_marks <= 0:
         return "Pending"
-    return "Pass" if submission.score >= PASS_THRESHOLD_MARKS else "Fail"
+    percentage = (float(submission.score) / total_marks) * 100
+    return "Pass" if percentage >= PASS_THRESHOLD_PERCENTAGE else "Fail"
 
 
 def _build_student_exam_history_item(submission: Submission) -> dict:
@@ -1052,7 +1053,7 @@ def _build_student_exam_history_item(submission: Submission) -> dict:
         "score": submission.score,
         "total_marks": total_marks,
         "percentage": percentage,
-        "pass_fail": _get_history_pass_fail(submission),
+        "pass_fail": _get_history_pass_fail(submission, total_marks),
         "submitted_at": submission.submitted_at,
         "started_at": submission.started_at,
         "is_result_published": bool(exam and exam.is_result_published),

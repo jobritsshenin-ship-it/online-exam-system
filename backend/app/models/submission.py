@@ -7,6 +7,50 @@ from app.db.base_class import Base
 from app.utils.enums import SubmissionStatus
 
 
+SUSPICIOUS_EVENT_TYPES = {
+    "keyboard_violation",
+    "window_blur",
+    "tab_hidden",
+    "fullscreen_exit",
+    "copy",
+    "paste",
+    "cut",
+    "page_unload",
+    "route_leave",
+    "logout_during_exam",
+    "manual_security_lock",
+    "reopen_attempt",
+}
+
+SUSPICIOUS_AUTO_SUBMIT_REASONS = {
+    "window_blur",
+    "tab_hidden",
+    "fullscreen_exit",
+    "page_unload",
+    "route_leave",
+    "logout_during_exam",
+    "manual_security_lock",
+    "reopen_attempt",
+}
+
+
+def is_suspicious_submission_event(event: "SubmissionEvent") -> bool:
+    if event.event_type in SUSPICIOUS_EVENT_TYPES:
+        return True
+
+    if event.event_type != "auto_submit":
+        return False
+
+    reason = (event.details or "").strip().lower()
+    if (
+        "timer_expired" in reason
+        or "timer expired" in reason
+        or "time expired" in reason
+    ):
+        return False
+    return any(item in reason for item in SUSPICIOUS_AUTO_SUBMIT_REASONS)
+
+
 class Submission(Base):
     __tablename__ = "submissions"
     __table_args__ = (
@@ -82,7 +126,7 @@ class Submission(Base):
 
     @property
     def cheat_event_count(self) -> int:
-        return len(self.events)
+        return sum(1 for event in self.events if is_suspicious_submission_event(event))
 
 
 class SubmissionAnswer(Base):

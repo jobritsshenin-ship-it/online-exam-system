@@ -65,6 +65,30 @@ const PROCTOR_EVENT_LABELS = {
   manual_security_lock: 'Manual security lock',
   reopen_attempt: 'Exam reopen attempt',
 }
+const SUSPICIOUS_PROCTOR_EVENT_TYPES = new Set([
+  'keyboard_violation',
+  'window_blur',
+  'tab_hidden',
+  'fullscreen_exit',
+  'copy',
+  'paste',
+  'cut',
+  'page_unload',
+  'route_leave',
+  'logout_during_exam',
+  'manual_security_lock',
+  'reopen_attempt',
+])
+const SUSPICIOUS_AUTO_SUBMIT_REASONS = new Set([
+  'window_blur',
+  'tab_hidden',
+  'fullscreen_exit',
+  'page_unload',
+  'route_leave',
+  'logout_during_exam',
+  'manual_security_lock',
+  'reopen_attempt',
+])
 
 const createEmptyCredentials = () => ({
   email: '',
@@ -407,11 +431,19 @@ function getAutoSubmitReason(event) {
   if (detail.includes('timer_expired') || detail.includes('timer expired') || detail.includes('time expired')) {
     return 'timer_expired'
   }
+  const reason = [...SUSPICIOUS_AUTO_SUBMIT_REASONS].find((item) => detail.includes(item))
+  if (reason) return reason
   return event?.event_type === 'auto_submit' ? 'security' : ''
 }
 
+function isSuspiciousProctorEvent(event) {
+  if (SUSPICIOUS_PROCTOR_EVENT_TYPES.has(event.event_type)) return true
+  if (event.event_type !== 'auto_submit') return false
+  return SUSPICIOUS_AUTO_SUBMIT_REASONS.has(getAutoSubmitReason(event))
+}
+
 function getEventImportance(event) {
-  if (event.event_type === 'auto_submit' && getAutoSubmitReason(event) !== 'timer_expired') return 5
+  if (event.event_type === 'auto_submit' && isSuspiciousProctorEvent(event)) return 5
   if (event.severity === 'critical') return 4
   if (event.event_type === 'keyboard_violation') return 3
   if (['fullscreen_exit', 'tab_hidden', 'window_blur', 'route_leave', 'page_unload'].includes(event.event_type)) return 2
@@ -423,14 +455,15 @@ function getSubmissionRiskSummary(submissionOrEvents) {
     ? submissionOrEvents
     : submissionOrEvents?.events ?? []
   const sortedEvents = getSortedProctorEvents(events)
-  const totalCount = sortedEvents.length
-  const criticalCount = sortedEvents.filter((event) => event.severity === 'critical').length
-  const keyboardViolationCount = sortedEvents.filter((event) => event.event_type === 'keyboard_violation').length
-  const autoSubmitCount = sortedEvents.filter((event) => event.event_type === 'auto_submit').length
+  const suspiciousEvents = sortedEvents.filter(isSuspiciousProctorEvent)
+  const totalCount = suspiciousEvents.length
+  const criticalCount = suspiciousEvents.filter((event) => event.severity === 'critical').length
+  const keyboardViolationCount = suspiciousEvents.filter((event) => event.event_type === 'keyboard_violation').length
+  const autoSubmitCount = suspiciousEvents.filter((event) => event.event_type === 'auto_submit').length
   const suspiciousAutoSubmitCount = sortedEvents.filter(
-    (event) => event.event_type === 'auto_submit' && getAutoSubmitReason(event) !== 'timer_expired',
+    (event) => event.event_type === 'auto_submit' && isSuspiciousProctorEvent(event),
   ).length
-  const topEvent = sortedEvents
+  const topEvent = suspiciousEvents
     .slice()
     .sort((first, second) => getEventImportance(second) - getEventImportance(first))[0]
   let riskLevel = 'none'
@@ -454,6 +487,7 @@ function getSubmissionRiskSummary(submissionOrEvents) {
     keyboardViolationCount,
     autoSubmitCount,
     suspiciousAutoSubmitCount,
+    eventCount: sortedEvents.length,
     riskLevel,
     riskLabel: riskLevel === 'none' ? 'No flags' : formatActivityAction(riskLevel),
     flagLabel,
@@ -461,6 +495,7 @@ function getSubmissionRiskSummary(submissionOrEvents) {
     topEvent,
     topEventLabel: topEvent ? formatProctorEventLabel(topEvent.event_type) : '',
     events: sortedEvents,
+    suspiciousEvents,
   }
 }
 
@@ -1028,6 +1063,7 @@ function StudentDashboard({ token, user, onAuthExpired, onLogoutGuardChange }) {
   const answersRef = useRef(answers)
   const hasAutoSubmittedRef = useRef(false)
   const autoSubmitInProgressRef = useRef(false)
+  const autoSubmitRequestRef = useRef(null)
 
   const currentStudentId = Number(user.id)
   const currentStudentSubmissions = useMemo(
@@ -1119,9 +1155,12 @@ function StudentDashboard({ token, user, onAuthExpired, onLogoutGuardChange }) {
   )
 
   const autoSubmitActiveExam = useCallback(
-    async (reason = 'manual_security_lock', { keepalive = false, updateUi = true } = {}) => {
+    (reason = 'manual_security_lock', { keepalive = false, updateUi = true } = {}) => {
       const exam = activeExamRef.current
-      if (!exam || hasAutoSubmittedRef.current || autoSubmitInProgressRef.current) return null
+      if (!exam) return Promise.resolve(null)
+      if (autoSubmitRequestRef.current) return autoSubmitRequestRef.current
+      if (hasAutoSubmittedRef.current || autoSubmitInProgressRef.current) return Promise.resolve(null)
+
       hasAutoSubmittedRef.current = true
       autoSubmitInProgressRef.current = true
 
@@ -1130,39 +1169,48 @@ function StudentDashboard({ token, user, onAuthExpired, onLogoutGuardChange }) {
         answers: buildSelectedAnswerPayload(answersRef.current),
       }
 
-      try {
-        const data = await apiRequest(`/exams/${exam.id}/auto-submit`, {
-          method: 'POST',
-          token,
-          keepalive,
-          body: requestBody,
-        })
-
-        if (updateUi) {
-          setResult({ ...data, exam_title: exam.title })
-          upsertCurrentStudentSubmission(data)
-          setActiveExam(null)
-          setActiveSubmission(null)
-          setAnswers({})
-          setReview({})
-          await loadStudentData()
-          setStatus({
-            loading: false,
-            error: '',
-            success: getAutoSubmitSuccessMessage(reason),
+      const request = (async () => {
+        try {
+          const data = await apiRequest(`/exams/${exam.id}/auto-submit`, {
+            method: 'POST',
+            token,
+            keepalive,
+            body: requestBody,
           })
-        }
 
-        return data
-      } catch (err) {
-        hasAutoSubmittedRef.current = false
-        autoSubmitInProgressRef.current = false
-        if (updateUi) {
-          if (handleAuthenticatedError(err, onAuthExpired)) return null
-          setStatus({ loading: false, error: formatStudentExamError(err.message), success: '' })
+          if (updateUi) {
+            setResult({ ...data, exam_title: exam.title })
+            upsertCurrentStudentSubmission(data)
+            setActiveExam(null)
+            setActiveSubmission(null)
+            setAnswers({})
+            setReview({})
+            await loadStudentData()
+            setStatus({
+              loading: false,
+              error: '',
+              success: getAutoSubmitSuccessMessage(reason),
+            })
+          }
+
+          return data
+        } catch (err) {
+          hasAutoSubmittedRef.current = false
+          if (updateUi) {
+            if (handleAuthenticatedError(err, onAuthExpired)) return null
+            setStatus({ loading: false, error: formatStudentExamError(err.message), success: '' })
+          }
+          return null
+        } finally {
+          if (autoSubmitRequestRef.current === request) {
+            autoSubmitRequestRef.current = null
+          }
+          autoSubmitInProgressRef.current = false
         }
-        return null
-      }
+      })()
+
+      autoSubmitRequestRef.current = request
+      return request
     },
     [loadStudentData, onAuthExpired, token, upsertCurrentStudentSubmission],
   )
@@ -1179,6 +1227,7 @@ function StudentDashboard({ token, user, onAuthExpired, onLogoutGuardChange }) {
       const mapped = mapSubmissionAnswers(submission)
       hasAutoSubmittedRef.current = false
       autoSubmitInProgressRef.current = false
+      autoSubmitRequestRef.current = null
       setActiveExam(exam)
       setActiveSubmission(submission)
       setAnswers(mapped.answers)
@@ -1636,6 +1685,9 @@ function ExamAttempt({
 
   async function clearCurrentResponse() {
     if (!currentQuestion) return
+    if (!hasSelectedAnswer(answers[currentQuestion.id])) return
+    const shouldClear = window.confirm('Clear this response? You can choose another answer afterwards.')
+    if (!shouldClear) return
     await onClear(currentQuestion.id)
   }
 
@@ -3880,7 +3932,7 @@ function SubmissionActivityModal({ activityState, onClose, getStudentYear }) {
 
             <SuspiciousActivitySummary summary={summary} />
 
-            {summary.totalCount > 0 ? (
+            {summary.eventCount > 0 ? (
               <ProctorEventList events={summary.events} />
             ) : (
               <p className="empty-state">No suspicious activity recorded for this submission.</p>
