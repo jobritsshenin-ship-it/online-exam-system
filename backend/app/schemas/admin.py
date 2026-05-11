@@ -11,7 +11,49 @@ class AdminSummaryRead(BaseModel):
     total_students: int
     total_admins: int
     total_submissions: int
+    submission_counts_by_exam: dict[int, int] = {}
     average_score: float | None = None
+
+
+class AdminSubmissionListItemRead(BaseModel):
+    id: int
+    submission_id: int
+    exam_id: int
+    exam_title: str
+    exam_subject: str | None
+    student_id: int
+    student_name: str
+    student_full_name: str
+    student_email: str
+    register_number: str | None
+    student_register_number: str | None
+    department: str | None
+    student_department: str | None
+    year: str | None
+    student_class_name: str | None
+    student_batch: str | None
+    status: str
+    score: int | None
+    total_marks: int
+    percentage: float | None
+    submitted_at: datetime | None
+    started_at: datetime
+    is_result_published: bool
+    integrity_status: str
+    cheat_event_count: int
+    suspicious_event_count: int
+    total_events: int
+    suspicious_events: int
+    critical_events: int
+    top_event_type: str | None = None
+    top_event_label: str | None = None
+
+
+class AdminSubmissionListRead(BaseModel):
+    items: list[AdminSubmissionListItemRead]
+    total: int
+    limit: int
+    offset: int
 
 
 class AdminActivityLogRead(BaseModel):

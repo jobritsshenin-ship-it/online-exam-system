@@ -2156,6 +2156,39 @@ select:focus {
   align-items: center;
 }
 
+.results-pagination-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.pagination-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.pagination-actions label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 900;
+}
+
+.pagination-actions select {
+  min-width: 82px;
+}
+
 .activity-filter-bar {
   display: grid;
   grid-template-columns: minmax(260px, 1fr) minmax(180px, 260px);
@@ -3070,6 +3103,21 @@ select:focus {
   .results-filter-bar,
   .activity-filter-bar {
     gap: 10px;
+  }
+
+  .results-pagination-bar,
+  .pagination-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .pagination-actions label {
+    justify-content: space-between;
+  }
+
+  .pagination-actions > *,
+  .pagination-actions select {
+    width: 100%;
   }
 
   .results-filter-bar select,

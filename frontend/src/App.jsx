@@ -49,6 +49,7 @@ const STUDENT_REGISTER_NUMBER_PATTERN = /^9635\d{8}$/
 const STUDENT_REGISTER_NUMBER_HELP = 'Register number must be a 12-digit number starting with 9635.'
 const KEYBOARD_VIOLATION_COOLDOWN_MS = 3000
 const CLEAR_RESPONSE_CONFIRM_MS = 3000
+const RESULT_PAGE_SIZE_OPTIONS = [25, 50, 100]
 const PROCTOR_EVENT_LABELS = {
   window_blur: 'Window switched / lost focus',
   tab_hidden: 'Tab switched / hidden',
@@ -306,6 +307,16 @@ async function downloadApiFile(path, { token, fallbackFilename }) {
   URL.revokeObjectURL(url)
 }
 
+function buildQueryString(params) {
+  const searchParams = new URLSearchParams()
+  Object.entries(params).forEach(([key, value]) => {
+    if (value === undefined || value === null || value === '') return
+    searchParams.set(key, String(value))
+  })
+  const query = searchParams.toString()
+  return query ? `?${query}` : ''
+}
+
 function handleAuthenticatedError(error, onAuthExpired) {
   if (isAuthExpiredError(error)) {
     onAuthExpired()
@@ -455,6 +466,47 @@ function getSubmissionRiskSummary(submissionOrEvents) {
   const events = Array.isArray(submissionOrEvents)
     ? submissionOrEvents
     : submissionOrEvents?.events ?? []
+  if (!Array.isArray(submissionOrEvents) && !Array.isArray(submissionOrEvents?.events)) {
+    const totalCount = Number(
+      submissionOrEvents?.suspicious_event_count ??
+      submissionOrEvents?.suspicious_events ??
+      submissionOrEvents?.cheat_event_count ??
+      0,
+    )
+    const criticalCount = Number(submissionOrEvents?.critical_events ?? 0)
+    const eventCount = Number(submissionOrEvents?.total_events ?? totalCount)
+    const topEventType = submissionOrEvents?.top_event_type ?? ''
+    const topEventLabel = submissionOrEvents?.top_event_label ?? (topEventType ? formatProctorEventLabel(topEventType) : '')
+    const suspiciousAutoSubmitCount = topEventType === 'auto_submit' ? 1 : 0
+    let riskLevel = 'none'
+
+    if (totalCount === 0) {
+      riskLevel = 'none'
+    } else if (suspiciousAutoSubmitCount > 0 || criticalCount > 1) {
+      riskLevel = 'critical'
+    } else if (criticalCount > 0 || topEventType === 'keyboard_violation') {
+      riskLevel = 'warning'
+    } else {
+      riskLevel = 'low'
+    }
+
+    return {
+      totalCount,
+      criticalCount,
+      keyboardViolationCount: topEventType === 'keyboard_violation' ? 1 : 0,
+      autoSubmitCount: suspiciousAutoSubmitCount,
+      suspiciousAutoSubmitCount,
+      eventCount,
+      riskLevel,
+      riskLabel: riskLevel === 'none' ? 'No flags' : formatActivityAction(riskLevel),
+      flagLabel: totalCount === 1 ? '1 flag' : `${totalCount} flags`,
+      criticalLabel: criticalCount === 1 ? '1 critical flag' : `${criticalCount} critical flags`,
+      topEvent: topEventType ? { event_type: topEventType } : null,
+      topEventLabel,
+      events: [],
+      suspiciousEvents: [],
+    }
+  }
   const sortedEvents = getSortedProctorEvents(events)
   const suspiciousEvents = sortedEvents.filter(isSuspiciousProctorEvent)
   const totalCount = suspiciousEvents.length
@@ -1918,6 +1970,12 @@ function AdminDashboard({ token, user, onAuthExpired }) {
   const [resultStatusFilter, setResultStatusFilter] = useState('all')
   const [resultPublishFilter, setResultPublishFilter] = useState('all')
   const [resultExportExamId, setResultExportExamId] = useState('')
+  const [resultPageSize, setResultPageSize] = useState(25)
+  const [resultOffset, setResultOffset] = useState(0)
+  const [resultTotal, setResultTotal] = useState(0)
+  const [resultRefreshKey, setResultRefreshKey] = useState(0)
+  const [isResultsLoading, setIsResultsLoading] = useState(false)
+  const [resultsError, setResultsError] = useState('')
   const [activitySearch, setActivitySearch] = useState('')
   const [activityActionFilter, setActivityActionFilter] = useState('all')
   const [isBackupDownloading, setIsBackupDownloading] = useState(false)
@@ -1975,46 +2033,17 @@ function AdminDashboard({ token, user, onAuthExpired }) {
   )
   const submissionCountByExamId = useMemo(() => {
     const counts = new Map()
-    submissions.forEach((submission) => {
-      counts.set(submission.exam_id, (counts.get(submission.exam_id) ?? 0) + 1)
+    Object.entries(summary?.submission_counts_by_exam ?? {}).forEach(([examId, count]) => {
+      counts.set(Number(examId), Number(count))
     })
     return counts
-  }, [submissions])
-  const filteredResultSubmissions = useMemo(() => {
-    const examSearch = resultExamSearch.trim().toLowerCase()
-    const studentSearch = resultStudentSearch.trim().toLowerCase()
-    return submissions.filter((submission) => {
-      const exam = examById.get(submission.exam_id)
-      const examText = [exam?.title, exam?.subject].filter(Boolean).join(' ').toLowerCase()
-      const studentText = [
-        submission.student_full_name,
-        submission.student_email,
-        submission.student_register_number,
-      ]
-        .filter(Boolean)
-        .join(' ')
-        .toLowerCase()
-      const isResultPublished = Boolean(exam?.is_result_published)
-
-      return (
-        (!examSearch || examText.includes(examSearch)) &&
-        (!studentSearch || studentText.includes(studentSearch)) &&
-        (resultStatusFilter === 'all' || submission.status === resultStatusFilter) &&
-        (
-          resultPublishFilter === 'all' ||
-          (resultPublishFilter === 'published' && isResultPublished) ||
-          (resultPublishFilter === 'not-published' && !isResultPublished)
-        )
-      )
-    })
-  }, [
-    examById,
-    resultExamSearch,
-    resultPublishFilter,
-    resultStatusFilter,
-    resultStudentSearch,
-    submissions,
-  ])
+  }, [summary?.submission_counts_by_exam])
+  const filteredResultSubmissions = submissions
+  const resultPageNumber = Math.floor(resultOffset / resultPageSize) + 1
+  const resultShowingFrom = resultTotal === 0 ? 0 : resultOffset + 1
+  const resultShowingTo = Math.min(resultOffset + filteredResultSubmissions.length, resultTotal)
+  const canGoToPreviousResultsPage = resultOffset > 0 && !isResultsLoading
+  const canGoToNextResultsPage = resultOffset + resultPageSize < resultTotal && !isResultsLoading
 
   const filteredUsers = useMemo(() => {
     const search = userSearch.trim().toLowerCase()
@@ -2071,6 +2100,43 @@ function AdminDashboard({ token, user, onAuthExpired }) {
     [unresolvedSecurityAlerts],
   )
 
+  const loadResultSubmissions = useCallback(
+    async ({
+      limit,
+      offset,
+      examSearch,
+      studentSearch,
+      statusFilter,
+      publishFilter,
+    }) => {
+      setIsResultsLoading(true)
+      setResultsError('')
+      try {
+        const data = await apiRequest(`/admin/submissions${buildQueryString({
+          limit,
+          offset,
+          search: studentSearch.trim(),
+          exam_search: examSearch.trim(),
+          status: statusFilter === 'all' ? '' : statusFilter,
+          result_published:
+            publishFilter === 'published'
+              ? true
+              : publishFilter === 'not-published'
+                ? false
+                : '',
+        })}`, { token })
+        setSubmissions(data.items ?? [])
+        setResultTotal(Number(data.total ?? 0))
+      } catch (err) {
+        if (handleAuthenticatedError(err, onAuthExpired)) return
+        setResultsError(err.message)
+      } finally {
+        setIsResultsLoading(false)
+      }
+    },
+    [onAuthExpired, token],
+  )
+
   const loadAdminData = useCallback(
     async (examId = null) => {
       setStatus((current) => ({ ...current, loading: true, error: '' }))
@@ -2087,11 +2153,6 @@ function AdminDashboard({ token, user, onAuthExpired }) {
         setSummary(summaryData)
         setActivityLogs(activityData)
         setSecurityAlerts(securityAlertData)
-        const submissionSets = await Promise.all(
-          examData.map((exam) => apiRequest(`/exams/${exam.id}/submissions`, { token })),
-        )
-        const allSubmissions = submissionSets.flat()
-        setSubmissions(allSubmissions)
         const requestedExamExists = examId && examData.some((exam) => exam.id === examId)
         const nextExamId = requestedExamExists
           ? examId
@@ -2108,6 +2169,7 @@ function AdminDashboard({ token, user, onAuthExpired }) {
         return
       }
       setStatus({ loading: false, error: '', success: '' })
+      setResultRefreshKey((current) => current + 1)
     },
     [onAuthExpired, token],
   )
@@ -2117,8 +2179,35 @@ function AdminDashboard({ token, user, onAuthExpired }) {
     loadAdminData(null)
   }, [loadAdminData])
 
+  useEffect(() => {
+    const timerId = window.setTimeout(() => {
+      void loadResultSubmissions({
+        limit: resultPageSize,
+        offset: resultOffset,
+        examSearch: resultExamSearch,
+        studentSearch: resultStudentSearch,
+        statusFilter: resultStatusFilter,
+        publishFilter: resultPublishFilter,
+      })
+    }, 250)
+    return () => window.clearTimeout(timerId)
+  }, [
+    loadResultSubmissions,
+    resultExamSearch,
+    resultOffset,
+    resultPageSize,
+    resultPublishFilter,
+    resultRefreshKey,
+    resultStatusFilter,
+    resultStudentSearch,
+  ])
+
   async function selectExam(examId) {
     await loadAdminData(examId)
+  }
+
+  function resetResultPage() {
+    setResultOffset(0)
   }
 
   function showError(err) {
@@ -2730,10 +2819,6 @@ function AdminDashboard({ token, user, onAuthExpired }) {
     let verifiedSubmissions = []
     try {
       verifiedSubmissions = await apiRequest(`/exams/${examId}/submissions`, { token })
-      setSubmissions((current) => [
-        ...verifiedSubmissions,
-        ...current.filter((submission) => Number(submission.exam_id) !== examId),
-      ])
     } catch (err) {
       showError(err)
       return
@@ -3287,7 +3372,10 @@ function AdminDashboard({ token, user, onAuthExpired }) {
                 type="search"
                 placeholder="Search exam by title or subject..."
                 value={resultExamSearch}
-                onChange={(event) => setResultExamSearch(event.target.value)}
+                onChange={(event) => {
+                  setResultExamSearch(event.target.value)
+                  resetResultPage()
+                }}
               />
             </label>
             <label className="search-box">
@@ -3296,12 +3384,18 @@ function AdminDashboard({ token, user, onAuthExpired }) {
                 type="search"
                 placeholder="Search student by name, email, or register number..."
                 value={resultStudentSearch}
-                onChange={(event) => setResultStudentSearch(event.target.value)}
+                onChange={(event) => {
+                  setResultStudentSearch(event.target.value)
+                  resetResultPage()
+                }}
               />
             </label>
             <select
               value={resultStatusFilter}
-              onChange={(event) => setResultStatusFilter(event.target.value)}
+              onChange={(event) => {
+                setResultStatusFilter(event.target.value)
+                resetResultPage()
+              }}
               aria-label="Submission status"
             >
               <option value="all">All</option>
@@ -3310,7 +3404,10 @@ function AdminDashboard({ token, user, onAuthExpired }) {
             </select>
             <select
               value={resultPublishFilter}
-              onChange={(event) => setResultPublishFilter(event.target.value)}
+              onChange={(event) => {
+                setResultPublishFilter(event.target.value)
+                resetResultPage()
+              }}
               aria-label="Result publication status"
             >
               <option value="all">All</option>
@@ -3318,6 +3415,54 @@ function AdminDashboard({ token, user, onAuthExpired }) {
               <option value="not-published">Results Not Published</option>
             </select>
           </div>
+
+          <div className="results-pagination-bar">
+            <div className="exam-meta">
+              <span>
+                {isResultsLoading
+                  ? 'Loading results...'
+                  : `Showing ${resultShowingFrom}-${resultShowingTo} of ${resultTotal}`}
+              </span>
+              <span>Page {resultPageNumber}</span>
+            </div>
+            <div className="pagination-actions">
+              <label>
+                <span>Rows</span>
+                <select
+                  value={resultPageSize}
+                  onChange={(event) => {
+                    setResultPageSize(Number(event.target.value))
+                    setResultOffset(0)
+                  }}
+                  aria-label="Results page size"
+                >
+                  {RESULT_PAGE_SIZE_OPTIONS.map((pageSize) => (
+                    <option value={pageSize} key={pageSize}>
+                      {pageSize}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <button
+                className="secondary-button"
+                type="button"
+                onClick={() => setResultOffset((current) => Math.max(0, current - resultPageSize))}
+                disabled={!canGoToPreviousResultsPage}
+              >
+                Previous
+              </button>
+              <button
+                className="secondary-button"
+                type="button"
+                onClick={() => setResultOffset((current) => current + resultPageSize)}
+                disabled={!canGoToNextResultsPage}
+              >
+                Next
+              </button>
+            </div>
+          </div>
+
+          {resultsError ? <p className="notice error">{resultsError}</p> : null}
 
           <div className="results-table-wrap submission-results-wrap">
             <table className="results-table submission-results-table">
@@ -3340,18 +3485,19 @@ function AdminDashboard({ token, user, onAuthExpired }) {
               <tbody>
                 {filteredResultSubmissions.map((submission) => {
                   const exam = examById.get(submission.exam_id)
-                  const totalMarks = getTotalMarks(exam)
+                  const totalMarks = submission.total_marks ?? getTotalMarks(exam)
                   const hasScore = submission.score !== null && submission.score !== undefined
                   const isSubmitted = submission.status === 'submitted'
-                  const isResultPublished = Boolean(exam?.is_result_published)
+                  const isResultPublished = submission.is_result_published ?? Boolean(exam?.is_result_published)
                   const riskSummary = getSubmissionRiskSummary(submission)
+                  const examTitle = submission.exam_title ?? exam?.title ?? `Exam ${submission.exam_id}`
                   return (
                     <tr key={submission.id}>
                       <td data-label="Student & Exam">
                         <div className="result-cell result-student-cell">
                           <strong>{formatStudentName(submission.student_full_name)}</strong>
                           <span>{submission.student_email}</span>
-                          <span className="result-exam-title">{exam?.title ?? `Exam ${submission.exam_id}`}</span>
+                          <span className="result-exam-title">{examTitle}</span>
                           <div className="result-meta-grid">
                             <span><b>Reg</b>{submission.student_register_number ?? '-'}</span>
                             <span><b>Dept</b>{submission.student_department ?? '-'}</span>
@@ -3436,7 +3582,9 @@ function AdminDashboard({ token, user, onAuthExpired }) {
             </table>
           </div>
 
-          {filteredResultSubmissions.length === 0 ? (
+          {isResultsLoading ? <LoadingBlock label="Loading result submissions" /> : null}
+
+          {!isResultsLoading && filteredResultSubmissions.length === 0 ? (
             <p className="empty-state">No submissions match your search.</p>
           ) : null}
 
@@ -4174,7 +4322,7 @@ function SubmissionReviewPanel({ submissions }) {
             ) : null}
 
             <div className="answer-review-grid">
-              {submission.answers.map((answer) => (
+              {(submission.answers ?? []).map((answer) => (
                 <div className={`answer-review-item ${answer.is_correct ? 'correct' : 'wrong'}`} key={answer.id}>
                   <strong>{answer.question_prompt}</strong>
                   <span>Selected: {answer.selected_option_text ?? 'Not answered'}</span>
@@ -4183,6 +4331,9 @@ function SubmissionReviewPanel({ submissions }) {
                   {answer.is_marked_for_review ? <span className="review-note">Marked for review</span> : null}
                 </div>
               ))}
+              {(submission.answers ?? []).length === 0 ? (
+                <p className="empty-state">Open View to inspect question-wise answers for this submission.</p>
+              ) : null}
             </div>
           </article>
         ))}
