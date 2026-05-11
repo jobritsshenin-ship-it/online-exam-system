@@ -48,6 +48,7 @@ const YEAR_OPTIONS = ['1st Year', '2nd Year', '3rd Year', '4th Year']
 const STUDENT_REGISTER_NUMBER_PATTERN = /^9635\d{8}$/
 const STUDENT_REGISTER_NUMBER_HELP = 'Register number must be a 12-digit number starting with 9635.'
 const KEYBOARD_VIOLATION_COOLDOWN_MS = 3000
+const CLEAR_RESPONSE_CONFIRM_MS = 3000
 const PROCTOR_EVENT_LABELS = {
   window_blur: 'Window switched / lost focus',
   tab_hidden: 'Tab switched / hidden',
@@ -1473,11 +1474,13 @@ function ExamAttempt({
   const questions = useMemo(() => exam.questions ?? [], [exam.questions])
   const [currentIndex, setCurrentIndex] = useState(0)
   const [fullscreenWarning, setFullscreenWarning] = useState('')
+  const [pendingClearQuestionId, setPendingClearQuestionId] = useState(null)
   const [visited, setVisited] = useState(() =>
     questions[0] ? { [questions[0].id]: true } : {},
   )
   const autoSubmitRef = useRef(false)
   const keyboardViolationRef = useRef(new Map())
+  const clearConfirmTimeoutRef = useRef(null)
   const deadline = useMemo(() => getAttemptDeadline(submission, exam), [exam, submission])
   const [remainingSeconds, setRemainingSeconds] = useState(() =>
     deadline ? Math.max(0, Math.floor((deadline.getTime() - Date.now()) / 1000)) : 0,
@@ -1490,6 +1493,7 @@ function ExamAttempt({
   const isFirstQuestion = currentIndex === 0
   const isUrgent = Boolean(deadline) && remainingSeconds <= 60
   const currentStatus = currentQuestion ? getQuestionStatus(currentQuestion) : 'not-visited'
+  const isClearConfirmationPending = currentQuestion?.id === pendingClearQuestionId
   const statusCounts = {
     'not-visited': 0,
     'not-answered': 0,
@@ -1502,6 +1506,29 @@ function ExamAttempt({
     const questionStatus = getQuestionStatus(question)
     statusCounts[questionStatus] += 1
   })
+
+  const clearClearResponseTimer = useCallback(() => {
+    if (clearConfirmTimeoutRef.current) {
+      window.clearTimeout(clearConfirmTimeoutRef.current)
+      clearConfirmTimeoutRef.current = null
+    }
+  }, [])
+
+  const resetClearConfirmation = useCallback(() => {
+    clearClearResponseTimer()
+    setPendingClearQuestionId(null)
+  }, [clearClearResponseTimer])
+
+  const startClearConfirmation = useCallback((questionId) => {
+    resetClearConfirmation()
+    setPendingClearQuestionId(questionId)
+    clearConfirmTimeoutRef.current = window.setTimeout(() => {
+      clearConfirmTimeoutRef.current = null
+      setPendingClearQuestionId((current) => (current === questionId ? null : current))
+    }, CLEAR_RESPONSE_CONFIRM_MS)
+  }, [resetClearConfirmation])
+
+  useEffect(() => () => clearClearResponseTimer(), [clearClearResponseTimer])
 
   useEffect(() => {
     autoSubmitRef.current = false
@@ -1654,6 +1681,7 @@ function ExamAttempt({
 
   function selectCurrentAnswer(optionId) {
     if (!currentQuestion) return
+    resetClearConfirmation()
     setVisited((current) =>
       current[currentQuestion.id] ? current : { ...current, [currentQuestion.id]: true },
     )
@@ -1661,6 +1689,7 @@ function ExamAttempt({
   }
 
   function goToQuestion(index) {
+    resetClearConfirmation()
     const nextIndex = Math.max(0, Math.min(index, totalQuestions - 1))
     const nextQuestion = questions[nextIndex]
     if (nextQuestion) {
@@ -1673,6 +1702,7 @@ function ExamAttempt({
 
   async function saveAndNext() {
     if (!currentQuestion) return
+    resetClearConfirmation()
     const didSave = await onSave(
       currentQuestion.id,
       answers[currentQuestion.id] ?? null,
@@ -1685,14 +1715,21 @@ function ExamAttempt({
 
   async function clearCurrentResponse() {
     if (!currentQuestion) return
-    if (!hasSelectedAnswer(answers[currentQuestion.id])) return
-    const shouldClear = window.confirm('Clear this response? You can choose another answer afterwards.')
-    if (!shouldClear) return
+    if (!hasSelectedAnswer(answers[currentQuestion.id])) {
+      resetClearConfirmation()
+      return
+    }
+    if (!isClearConfirmationPending) {
+      startClearConfirmation(currentQuestion.id)
+      return
+    }
+    resetClearConfirmation()
     await onClear(currentQuestion.id)
   }
 
   async function toggleCurrentReview() {
     if (!currentQuestion) return
+    resetClearConfirmation()
     await onToggleReview(currentQuestion.id)
   }
 
@@ -1763,10 +1800,17 @@ function ExamAttempt({
               >
                 Previous
               </button>
-              <button className="secondary-button" type="button" disabled={isLoading} onClick={clearCurrentResponse}>
-                <Trash2 size={16} aria-hidden="true" />
-                Clear Response
-              </button>
+              <div className="clear-response-control">
+                <button className="secondary-button" type="button" disabled={isLoading} onClick={clearCurrentResponse}>
+                  <Trash2 size={16} aria-hidden="true" />
+                  {isClearConfirmationPending ? 'Click again to clear' : 'Clear Response'}
+                </button>
+                {isClearConfirmationPending ? (
+                  <span className="clear-response-helper" role="status">
+                    This will remove your selected answer.
+                  </span>
+                ) : null}
+              </div>
               <button
                 className={`secondary-button ${review[currentQuestion.id] ? 'review-active' : ''}`}
                 type="button"
