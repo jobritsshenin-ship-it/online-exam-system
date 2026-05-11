@@ -3588,7 +3588,6 @@ function AdminDashboard({ token, user, onAuthExpired }) {
             <p className="empty-state">No submissions match your search.</p>
           ) : null}
 
-          <SubmissionReviewPanel submissions={filteredResultSubmissions} />
         </section>
       ) : null}
 
@@ -4261,85 +4260,6 @@ function SubmissionDetailModal({
         ) : null}
       </div>
     </div>
-  )
-}
-
-function SubmissionReviewPanel({ submissions }) {
-  function getStudentDetails(submission) {
-    const year = submission.student_class_name ?? submission.student_batch
-    return [
-      submission.student_register_number,
-      submission.student_department,
-      year,
-    ]
-      .filter(Boolean)
-      .join(' - ')
-  }
-
-  return (
-    <section className="details-band">
-      <SectionTitle icon={Users} eyebrow="Student work" title="Submitted answers and flags" />
-      <div className="submission-review-list">
-        {submissions.map((submission) => (
-          <article className="submission-review-card" key={submission.id}>
-            <div className="panel-title-row">
-              <div>
-                <h3>{formatStudentName(submission.student_full_name)}</h3>
-                <p className="empty-state">{submission.student_email}</p>
-                {getStudentDetails(submission) ? (
-                  <p className="empty-state">{getStudentDetails(submission)}</p>
-                ) : null}
-              </div>
-              <div className="exam-meta">
-                <span>{submission.status}</span>
-                <span>{submission.score ?? 0} marks</span>
-                <span className={`integrity-pill ${getIntegrityStatusClass(submission.integrity_status)}`}>
-                  {formatIntegrityStatus(submission.integrity_status)}
-                </span>
-                <span className={submission.cheat_event_count ? 'flag-pill' : ''}>
-                  {submission.cheat_event_count} flags
-                </span>
-              </div>
-            </div>
-
-            {submission.integrity_status === 'tampered' ? (
-              <div className="cheat-panel integrity-warning">
-                <AlertTriangle size={18} aria-hidden="true" />
-                <div>
-                  <strong>Result integrity mismatch detected. Review Security Alerts.</strong>
-                </div>
-              </div>
-            ) : null}
-
-            {submission.cheat_event_count ? (
-              <div className="cheat-panel">
-                <AlertTriangle size={18} aria-hidden="true" />
-                <div>
-                  <strong>Suspicious activity</strong>
-                  <ProctorEventList events={submission.events ?? []} />
-                </div>
-              </div>
-            ) : null}
-
-            <div className="answer-review-grid">
-              {(submission.answers ?? []).map((answer) => (
-                <div className={`answer-review-item ${answer.is_correct ? 'correct' : 'wrong'}`} key={answer.id}>
-                  <strong>{answer.question_prompt}</strong>
-                  <span>Selected: {answer.selected_option_text ?? 'Not answered'}</span>
-                  <span>Correct: {answer.correct_option_text ?? 'Not set'}</span>
-                  <span>{answer.marks_awarded} marks</span>
-                  {answer.is_marked_for_review ? <span className="review-note">Marked for review</span> : null}
-                </div>
-              ))}
-              {(submission.answers ?? []).length === 0 ? (
-                <p className="empty-state">Open View to inspect question-wise answers for this submission.</p>
-              ) : null}
-            </div>
-          </article>
-        ))}
-        {submissions.length === 0 ? <p className="empty-state">No submissions for this exam yet.</p> : null}
-      </div>
-    </section>
   )
 }
 

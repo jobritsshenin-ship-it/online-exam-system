@@ -2106,11 +2106,6 @@ select:focus {
   padding: 18px;
 }
 
-.submission-review-list {
-  display: grid;
-  gap: 16px;
-}
-
 .results-workspace {
   display: grid;
   gap: 18px;
@@ -2484,15 +2479,6 @@ select:focus {
 
 .table-actions select {
   min-width: min(100%, 220px);
-}
-
-.submission-review-card {
-  display: grid;
-  gap: 16px;
-  padding: 20px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: #fff;
 }
 
 .flag-pill {
@@ -3021,7 +3007,6 @@ select:focus {
   .user-card,
   .tool-panel,
   .question-panel,
-  .submission-review-card,
   .exam-builder-module {
     padding: 16px;
   }
