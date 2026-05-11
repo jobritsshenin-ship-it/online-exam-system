@@ -2873,46 +2873,72 @@ function AdminDashboard({ token, onAuthExpired }) {
             </select>
           </div>
 
-          <div className="results-table-wrap">
+          <div className="results-table-wrap submission-results-wrap">
             <table className="results-table submission-results-table">
+              <colgroup>
+                <col className="result-col-student" />
+                <col className="result-col-score" />
+                <col className="result-col-submission" />
+                <col className="result-col-integrity" />
+                <col className="result-col-actions" />
+              </colgroup>
               <thead>
                 <tr>
-                  <th>Exam title</th>
-                  <th>Student name</th>
-                  <th>Register No.</th>
-                  <th>Dept.</th>
-                  <th>Year</th>
+                  <th>Student & Exam</th>
                   <th>Score</th>
-                  <th>Status</th>
-                  <th>Submitted</th>
-                  <th>Result</th>
-                  <th>Integrity</th>
+                  <th>Submission</th>
+                  <th>Result & Integrity</th>
                   <th>Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {filteredResultSubmissions.map((submission) => {
                   const exam = examById.get(submission.exam_id)
+                  const totalMarks = getTotalMarks(exam)
+                  const hasScore = submission.score !== null && submission.score !== undefined
+                  const isSubmitted = submission.status === 'submitted'
+                  const isResultPublished = Boolean(exam?.is_result_published)
                   return (
                     <tr key={submission.id}>
-                      <td>{exam?.title ?? `Exam ${submission.exam_id}`}</td>
-                      <td>
-                        <strong>{submission.student_full_name}</strong>
-                        <span>{submission.student_email}</span>
+                      <td data-label="Student & Exam">
+                        <div className="result-cell result-student-cell">
+                          <strong>{submission.student_full_name}</strong>
+                          <span>{submission.student_email}</span>
+                          <span className="result-exam-title">{exam?.title ?? `Exam ${submission.exam_id}`}</span>
+                          <div className="result-meta-grid">
+                            <span><b>Reg</b>{submission.student_register_number ?? '-'}</span>
+                            <span><b>Dept</b>{submission.student_department ?? '-'}</span>
+                            <span><b>Year</b>{getStudentYear(submission) || '-'}</span>
+                          </div>
+                        </div>
                       </td>
-                      <td>{submission.student_register_number ?? '-'}</td>
-                      <td>{submission.student_department ?? '-'}</td>
-                      <td>{getStudentYear(submission) || '-'}</td>
-                      <td>{submission.score ?? '-'}</td>
-                      <td>{submission.status === 'submitted' ? 'Submitted' : 'In Progress'}</td>
-                      <td>{formatDateTime(submission.submitted_at)}</td>
-                      <td>{exam?.is_result_published ? 'Results Published' : 'Results Not Published'}</td>
-                      <td>
-                        <span className={`integrity-pill ${getIntegrityStatusClass(submission.integrity_status)}`}>
-                          {formatIntegrityStatus(submission.integrity_status)}
-                        </span>
+                      <td data-label="Score">
+                        <div className="result-cell result-score-cell">
+                          <strong>{hasScore ? submission.score : '-'}</strong>
+                          <span>
+                            {totalMarks ? `of ${totalMarks} marks` : 'Total marks not set'}
+                          </span>
+                        </div>
                       </td>
-                      <td>
+                      <td data-label="Submission">
+                        <div className="result-cell">
+                          <span className={`result-status-pill ${isSubmitted ? 'submitted' : 'in-progress'}`}>
+                            {isSubmitted ? 'Submitted' : 'In Progress'}
+                          </span>
+                          <span>{formatDateTime(submission.submitted_at)}</span>
+                        </div>
+                      </td>
+                      <td data-label="Result & Integrity">
+                        <div className="result-cell">
+                          <span className={`result-publish-pill ${isResultPublished ? 'published' : 'not-published'}`}>
+                            {isResultPublished ? 'Results Published' : 'Results Not Published'}
+                          </span>
+                          <span className={`integrity-pill ${getIntegrityStatusClass(submission.integrity_status)}`}>
+                            {formatIntegrityStatus(submission.integrity_status)}
+                          </span>
+                        </div>
+                      </td>
+                      <td data-label="Actions">
                         <div className="table-actions">
                           <button
                             className="secondary-button"

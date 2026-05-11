@@ -2167,7 +2167,28 @@ select:focus {
 }
 
 .submission-results-table {
-  min-width: 1060px;
+  min-width: 0;
+  table-layout: fixed;
+}
+
+.submission-results-table .result-col-student {
+  width: 34%;
+}
+
+.submission-results-table .result-col-score {
+  width: 12%;
+}
+
+.submission-results-table .result-col-submission {
+  width: 17%;
+}
+
+.submission-results-table .result-col-integrity {
+  width: 18%;
+}
+
+.submission-results-table .result-col-actions {
+  width: 19%;
 }
 
 .submission-results-table th,
@@ -2175,7 +2196,13 @@ select:focus {
   padding: 10px 11px;
 }
 
+.submission-results-table th {
+  white-space: nowrap;
+  overflow-wrap: normal;
+}
+
 .submission-results-table .table-actions {
+  align-items: flex-start;
   gap: 6px;
 }
 
@@ -2192,6 +2219,88 @@ select:focus {
 
 .submission-results-table .action-menu-list {
   min-width: 210px;
+}
+
+.result-cell {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.results-table td .result-cell span {
+  margin-top: 0;
+}
+
+.result-student-cell strong,
+.result-exam-title {
+  overflow-wrap: anywhere;
+}
+
+.result-exam-title {
+  color: var(--ink) !important;
+  font-weight: 800;
+}
+
+.result-meta-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 3px;
+}
+
+.results-table td .result-meta-grid span {
+  display: inline-flex !important;
+  align-items: center;
+  gap: 4px;
+  width: fit-content;
+  max-width: 100%;
+  min-height: 24px;
+  padding: 3px 7px;
+  border: 1px solid #e5ece9;
+  border-radius: 999px;
+  color: var(--muted);
+  background: #f8fbfa;
+  font-size: 0.76rem;
+  font-weight: 800;
+}
+
+.result-meta-grid b {
+  color: #334155;
+  font-size: 0.68rem;
+  text-transform: uppercase;
+}
+
+.result-score-cell strong {
+  font-size: 1.08rem;
+}
+
+.result-status-pill,
+.result-publish-pill {
+  display: inline-flex !important;
+  align-items: center;
+  width: fit-content;
+  min-height: 28px;
+  margin-top: 0 !important;
+  padding: 5px 9px;
+  border-radius: 999px;
+  font-size: 0.78rem !important;
+  font-weight: 900;
+}
+
+.result-status-pill.submitted,
+.result-publish-pill.published {
+  color: var(--success) !important;
+  background: #ecfdf3;
+}
+
+.result-status-pill.in-progress {
+  color: var(--accent) !important;
+  background: #fff7ed;
+}
+
+.result-publish-pill.not-published {
+  color: #475467 !important;
+  background: #f2f4f7;
 }
 
 .activity-table {
@@ -3223,6 +3332,77 @@ select:focus {
   .option-row {
     min-height: 44px;
     padding: 10px;
+  }
+}
+
+@media (max-width: 640px) {
+  .submission-results-wrap {
+    overflow-x: hidden;
+    border: 0;
+    background: transparent;
+  }
+
+  .submission-results-table {
+    display: block;
+    min-width: 0;
+    border-collapse: separate;
+  }
+
+  .submission-results-table colgroup,
+  .submission-results-table thead {
+    display: none;
+  }
+
+  .submission-results-table tbody {
+    display: grid;
+    gap: 12px;
+  }
+
+  .submission-results-table tr {
+    display: grid;
+    gap: 12px;
+    padding: 14px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: #fff;
+  }
+
+  .submission-results-table td {
+    display: grid;
+    grid-template-columns: minmax(96px, 0.34fr) minmax(0, 1fr);
+    gap: 8px 12px;
+    align-items: start;
+    padding: 0;
+    border-bottom: 0;
+  }
+
+  .submission-results-table td::before {
+    content: attr(data-label);
+    color: var(--muted);
+    font-size: 0.72rem;
+    font-weight: 900;
+    letter-spacing: 0;
+    text-transform: uppercase;
+  }
+
+  .submission-results-table td[data-label="Student & Exam"],
+  .submission-results-table td[data-label="Actions"] {
+    grid-template-columns: 1fr;
+  }
+
+  .submission-results-table .table-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .submission-results-table .table-actions .action-menu {
+    grid-column: 1 / -1;
+  }
+
+  .submission-results-table .secondary-button,
+  .submission-results-table .action-menu-trigger {
+    width: 100%;
   }
 }
 
