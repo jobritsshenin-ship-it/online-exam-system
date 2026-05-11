@@ -45,6 +45,9 @@ const EXAM_POLICY_POINTS = [
 ]
 const DEPARTMENT_OPTIONS = ['CSE', 'AIDS', 'MECH', 'CIVIL', 'EEE', 'ECE', 'MBA', 'S&H']
 const YEAR_OPTIONS = ['1st Year', '2nd Year', '3rd Year', '4th Year']
+const STUDENT_REGISTER_NUMBER_PATTERN = /^9635\d{8}$/
+const STUDENT_REGISTER_NUMBER_HELP = 'Register number must be a 12-digit number starting with 9635.'
+const KEYBOARD_VIOLATION_COOLDOWN_MS = 3000
 
 const createEmptyCredentials = () => ({
   email: '',
@@ -60,6 +63,91 @@ const createEmptySignup = () => ({
   password: '',
   confirmPassword: '',
 })
+
+function formatStudentName(value) {
+  return String(value ?? '').trim().toUpperCase() || '-'
+}
+
+function formatUserFullName(user) {
+  if (!user) return '-'
+  return user.role === 'student' ? formatStudentName(user.full_name) : user.full_name
+}
+
+function normalizeKeyboardKey(event) {
+  if (event.key === 'Esc') return 'Escape'
+  if (event.key === ' ') return 'Space'
+  if (event.key === 'OS') return 'Meta'
+  if (!event.key || event.key === 'Unidentified') return event.code || 'Unknown'
+  return event.key.length === 1 ? event.key.toUpperCase() : event.key
+}
+
+function keyboardShortcutLabel(event, key = normalizeKeyboardKey(event)) {
+  const modifiers = []
+  if (event.ctrlKey) modifiers.push('Ctrl')
+  if (event.altKey) modifiers.push('Alt')
+  if (event.shiftKey) modifiers.push('Shift')
+  if (event.metaKey) modifiers.push('Meta')
+
+  if (modifiers.length === 0) return key === 'Meta' ? 'Meta/Windows key' : key
+  if (['Control', 'Alt', 'Shift', 'Meta'].includes(key)) return modifiers.join('+')
+  return [...modifiers, key].join('+')
+}
+
+function getKeyboardViolation(event) {
+  const key = normalizeKeyboardKey(event)
+  const upperKey = key.toUpperCase()
+
+  if (['Escape', 'F12', 'PrintScreen'].includes(key)) {
+    return { label: key, isShortcut: false }
+  }
+
+  if (key === 'Meta') {
+    return { label: 'Meta/Windows key', isShortcut: false }
+  }
+
+  if (event.altKey && (key === 'Tab' || key === 'F4')) {
+    return { label: keyboardShortcutLabel(event, key), isShortcut: true }
+  }
+
+  if (event.metaKey && !['Control', 'Alt', 'Shift'].includes(key)) {
+    return { label: keyboardShortcutLabel(event, key), isShortcut: true }
+  }
+
+  if (!event.ctrlKey) return null
+
+  if (event.shiftKey && ['I', 'J', 'C'].includes(upperKey)) {
+    return { label: keyboardShortcutLabel(event, upperKey), isShortcut: true }
+  }
+
+  if (['C', 'V', 'X', 'S', 'P', 'U'].includes(upperKey)) {
+    return { label: keyboardShortcutLabel(event, upperKey), isShortcut: true }
+  }
+
+  return null
+}
+
+function getKeyboardEventMetadata(event) {
+  return {
+    key: event.key,
+    code: event.code,
+    ctrlKey: event.ctrlKey,
+    altKey: event.altKey,
+    shiftKey: event.shiftKey,
+    metaKey: event.metaKey,
+    repeat: event.repeat,
+    timestamp: new Date().toISOString(),
+  }
+}
+
+function getClipboardViolation(event) {
+  const labels = {
+    copy: 'Ctrl+C',
+    paste: 'Ctrl+V',
+    cut: 'Ctrl+X',
+    contextmenu: 'Context menu',
+  }
+  return labels[event.type] ?? formatActivityAction(event.type)
+}
 
 function formatApiErrorDetail(detail) {
   if (typeof detail === 'string') {
@@ -489,7 +577,7 @@ function LoginScreen({ onAuthenticated }) {
     if (!institutionalEmail.endsWith(STUDENT_EMAIL_DOMAIN)) {
       return "Use your official Stella Mary's institutional email address."
     }
-    if (!registerNumber) return 'Register number is required.'
+    if (!STUDENT_REGISTER_NUMBER_PATTERN.test(registerNumber)) return STUDENT_REGISTER_NUMBER_HELP
     if (!department) return 'Department is required.'
     if (!DEPARTMENT_OPTIONS.includes(department)) return 'Choose a valid department.'
     if (!year) return 'Year is required.'
@@ -517,7 +605,7 @@ function LoginScreen({ onAuthenticated }) {
         method: 'POST',
         body: {
           email: signup.institutional_email.trim().toLowerCase(),
-          full_name: signup.full_name.trim(),
+          full_name: formatStudentName(signup.full_name),
           password: signup.password,
           role: 'student',
           register_number: signup.register_number.trim(),
@@ -724,9 +812,13 @@ function LoginScreen({ onAuthenticated }) {
                   onChange={(event) =>
                     setSignup((current) => ({ ...current, register_number: event.target.value }))
                   }
-                  placeholder="Enter register number"
+                  inputMode="numeric"
+                  maxLength={12}
+                  pattern="9635[0-9]{8}"
+                  placeholder="9635XXXXXXXX"
                   required
                 />
+                <span className="field-help">{STUDENT_REGISTER_NUMBER_HELP}</span>
               </label>
               <label>
                 Department
@@ -792,7 +884,7 @@ function TopBar({ user, onLogout, hideLogout = false }) {
       <div className="topbar-actions">
         <span className="user-pill">
           <UserRound size={16} aria-hidden="true" />
-          {user.full_name}
+          {formatUserFullName(user)}
         </span>
         {!hideLogout ? (
           <button className="icon-button" type="button" onClick={onLogout} title="Sign out">
@@ -885,15 +977,19 @@ function StudentDashboard({ token, user, onAuthExpired, onLogoutGuardChange }) {
   }, [currentStudentId])
 
   const reportEvent = useCallback(
-    async (eventType, details, { keepalive = false } = {}) => {
+    async (eventType, details, { keepalive = false, metadata = null } = {}) => {
       const exam = activeExamRef.current
       if (!exam) return
+      const body = { event_type: eventType, details, severity: 'critical' }
+      if (metadata) {
+        body.metadata_json = JSON.stringify(metadata)
+      }
       try {
         await apiRequest(`/exams/${exam.id}/proctoring-events`, {
           method: 'POST',
           token,
           keepalive,
-          body: { event_type: eventType, details, severity: 'critical' },
+          body,
         })
       } catch (err) {
         if (handleAuthenticatedError(err, onAuthExpired)) return
@@ -1049,7 +1145,7 @@ function StudentDashboard({ token, user, onAuthExpired, onLogoutGuardChange }) {
       <section className="dashboard-hero">
         <div>
           <p className="eyebrow">Welcome back</p>
-          <h1>{user.full_name}</h1>
+          <h1>{formatUserFullName(user)}</h1>
           <p>Published exams appear here as soon as an administrator opens them.</p>
         </div>
         <div className="metric-row">
@@ -1213,6 +1309,7 @@ function ExamAttempt({
     questions[0] ? { [questions[0].id]: true } : {},
   )
   const autoSubmitRef = useRef(false)
+  const keyboardViolationRef = useRef(new Map())
   const deadline = useMemo(() => getAttemptDeadline(submission, exam), [exam, submission])
   const [remainingSeconds, setRemainingSeconds] = useState(() =>
     deadline ? Math.max(0, Math.floor((deadline.getTime() - Date.now()) / 1000)) : 0,
@@ -1240,6 +1337,7 @@ function ExamAttempt({
 
   useEffect(() => {
     autoSubmitRef.current = false
+    keyboardViolationRef.current.clear()
   }, [submission?.id])
 
   useEffect(() => {
@@ -1301,8 +1399,43 @@ function ExamAttempt({
       void onProctorEvent('window_blur', 'Browser window lost focus during the exam.')
       void onAutoSubmit('window_blur')
     }
+    function reportKeyboardViolation(label, metadata, isShortcut, detailsOverride = null) {
+      const dedupeKey = label.toLowerCase()
+      const now = Date.now()
+      const lastReportedAt = keyboardViolationRef.current.get(dedupeKey) ?? 0
+      if (now - lastReportedAt < KEYBOARD_VIOLATION_COOLDOWN_MS) return
+      keyboardViolationRef.current.set(dedupeKey, now)
+      void onProctorEvent(
+        'keyboard_violation',
+        detailsOverride ?? `${isShortcut ? 'Suspicious shortcut' : 'Suspicious key'} detected: ${label}`,
+        { metadata },
+      )
+    }
+    function logKeyboardViolation(event) {
+      const violation = getKeyboardViolation(event)
+      if (!violation) return
+      event.preventDefault()
+      reportKeyboardViolation(violation.label, getKeyboardEventMetadata(event), violation.isShortcut)
+    }
     function logClipboard(event) {
-      void onProctorEvent(event.type, `Clipboard event detected: ${event.type}.`)
+      event.preventDefault()
+      const label = getClipboardViolation(event)
+      const metadata = {
+        key: label,
+        code: event.type,
+        ctrlKey: false,
+        altKey: false,
+        shiftKey: false,
+        metaKey: false,
+        repeat: false,
+        timestamp: new Date().toISOString(),
+      }
+      reportKeyboardViolation(
+        label,
+        metadata,
+        event.type !== 'contextmenu',
+        event.type === 'contextmenu' ? 'Suspicious context menu detected.' : null,
+      )
     }
     function handlePageLeave() {
       if (autoSubmitRef.current) return
@@ -1319,9 +1452,11 @@ function ExamAttempt({
     window.addEventListener('blur', logBlur)
     window.addEventListener('pagehide', handlePageLeave)
     window.addEventListener('beforeunload', handleBeforeUnload)
-    document.addEventListener('copy', logClipboard)
-    document.addEventListener('paste', logClipboard)
-    document.addEventListener('contextmenu', logClipboard)
+    document.addEventListener('keydown', logKeyboardViolation, true)
+    document.addEventListener('copy', logClipboard, true)
+    document.addEventListener('paste', logClipboard, true)
+    document.addEventListener('cut', logClipboard, true)
+    document.addEventListener('contextmenu', logClipboard, true)
 
     return () => {
       document.removeEventListener('fullscreenchange', handleFullscreenChange)
@@ -1329,9 +1464,11 @@ function ExamAttempt({
       window.removeEventListener('blur', logBlur)
       window.removeEventListener('pagehide', handlePageLeave)
       window.removeEventListener('beforeunload', handleBeforeUnload)
-      document.removeEventListener('copy', logClipboard)
-      document.removeEventListener('paste', logClipboard)
-      document.removeEventListener('contextmenu', logClipboard)
+      document.removeEventListener('keydown', logKeyboardViolation, true)
+      document.removeEventListener('copy', logClipboard, true)
+      document.removeEventListener('paste', logClipboard, true)
+      document.removeEventListener('cut', logClipboard, true)
+      document.removeEventListener('contextmenu', logClipboard, true)
     }
   }, [onAutoSubmit, onProctorEvent])
 
@@ -1403,7 +1540,7 @@ function ExamAttempt({
           <div>
             <p className="eyebrow">In progress</p>
             <h2>{exam.title}</h2>
-            <p>{user.full_name} - {user.email}</p>
+            <p>{formatUserFullName(user)} - {user.email}</p>
             <p className="exam-security-warning">
               {SYSTEM_EXAM_WARNING}
             </p>
@@ -2042,8 +2179,8 @@ function AdminDashboard({ token, user, onAuthExpired }) {
 
   async function handleCreateUser(event) {
     event.preventDefault()
-    if (userForm.role === 'student' && !userForm.register_number.trim()) {
-      setStatus({ loading: false, error: 'Register number is required for student users.', success: '' })
+    if (userForm.role === 'student' && !STUDENT_REGISTER_NUMBER_PATTERN.test(userForm.register_number.trim())) {
+      setStatus({ loading: false, error: STUDENT_REGISTER_NUMBER_HELP, success: '' })
       return
     }
     if (userForm.role === 'student' && !userForm.department.trim()) {
@@ -2070,7 +2207,7 @@ function AdminDashboard({ token, user, onAuthExpired }) {
         token,
         body: {
           email: userForm.email.trim().toLowerCase(),
-          full_name: userForm.full_name.trim(),
+          full_name: userForm.role === 'student' ? formatStudentName(userForm.full_name) : userForm.full_name.trim(),
           password: userForm.password,
           role: userForm.role,
           register_number: userForm.register_number.trim(),
@@ -2151,7 +2288,7 @@ function AdminDashboard({ token, user, onAuthExpired }) {
   function studentFromSubmission(submission) {
     return {
       id: submission.student_id,
-      full_name: submission.student_full_name,
+      full_name: formatStudentName(submission.student_full_name),
       email: submission.student_email,
       register_number: submission.student_register_number,
       department: submission.student_department,
@@ -2162,7 +2299,7 @@ function AdminDashboard({ token, user, onAuthExpired }) {
   function studentFromUser(user) {
     return {
       id: user.id,
-      full_name: user.full_name,
+      full_name: formatStudentName(user.full_name),
       email: user.email,
       register_number: user.register_number,
       department: user.department,
@@ -2692,7 +2829,7 @@ function AdminDashboard({ token, user, onAuthExpired }) {
                 <article className="user-card" key={user.id}>
                   <div>
                     <div className="panel-title-row">
-                      <h3>{user.full_name}</h3>
+                      <h3>{formatUserFullName(user)}</h3>
                       <div className="exam-meta">
                         <span>{user.role}</span>
                         <span>{user.is_active ? 'Active' : 'Inactive'}</span>
@@ -2833,8 +2970,13 @@ function AdminDashboard({ token, user, onAuthExpired }) {
                 <input
                   value={userForm.register_number}
                   onChange={(event) => setUserForm((current) => ({ ...current, register_number: event.target.value }))}
+                  inputMode="numeric"
+                  maxLength={12}
+                  pattern="9635[0-9]{8}"
+                  placeholder="9635XXXXXXXX"
                   required={userForm.role === 'student'}
                 />
+                {userForm.role === 'student' ? <span className="field-help">{STUDENT_REGISTER_NUMBER_HELP}</span> : null}
               </label>
               <button className="primary-button" type="submit" disabled={status.loading}>
                 <UserPlus size={16} aria-hidden="true" />
@@ -2944,7 +3086,7 @@ function AdminDashboard({ token, user, onAuthExpired }) {
                     <tr key={submission.id}>
                       <td data-label="Student & Exam">
                         <div className="result-cell result-student-cell">
-                          <strong>{submission.student_full_name}</strong>
+                          <strong>{formatStudentName(submission.student_full_name)}</strong>
                           <span>{submission.student_email}</span>
                           <span className="result-exam-title">{exam?.title ?? `Exam ${submission.exam_id}`}</span>
                           <div className="result-meta-grid">
@@ -3003,12 +3145,12 @@ function AdminDashboard({ token, user, onAuthExpired }) {
                             items={[
                               {
                                 label: 'Student Performance CSV',
-                                helper: submission.student_full_name,
+                                helper: formatStudentName(submission.student_full_name),
                                 onSelect: () => exportStudentPerformanceCsv(submission),
                               },
                               {
                                 label: 'Student Exam History CSV',
-                                helper: submission.student_full_name,
+                                helper: formatStudentName(submission.student_full_name),
                                 onSelect: () => downloadStudentHistoryCsv(studentFromSubmission(submission)),
                               },
                             ]}
@@ -3270,7 +3412,7 @@ function StudentExamHistoryModal({ historyState, onClose, onDownload }) {
   const firstHistoryItem = historyState.history[0]
   const student = firstHistoryItem
     ? {
-        full_name: firstHistoryItem.student_name,
+        full_name: formatStudentName(firstHistoryItem.student_name),
         email: firstHistoryItem.student_email,
         register_number: firstHistoryItem.register_number,
         department: firstHistoryItem.department,
@@ -3322,7 +3464,7 @@ function StudentExamHistoryModal({ historyState, onClose, onDownload }) {
             <div className="submission-detail-grid">
               <div>
                 <span>Student name</span>
-                <strong>{student?.full_name ?? '-'}</strong>
+                <strong>{formatStudentName(student?.full_name)}</strong>
               </div>
               <div>
                 <span>Email</span>
@@ -3488,7 +3630,7 @@ function SubmissionDetailModal({
             <div className="submission-detail-grid">
               <div>
                 <span>Student name</span>
-                <strong>{submission.student_full_name}</strong>
+                <strong>{formatStudentName(submission.student_full_name)}</strong>
               </div>
               <div>
                 <span>Email</span>
@@ -3539,13 +3681,23 @@ function SubmissionDetailModal({
               </div>
             ) : null}
 
+            {(submission.events ?? []).length > 0 ? (
+              <div className="cheat-panel">
+                <AlertTriangle size={18} aria-hidden="true" />
+                <div>
+                  <strong>Proctoring events</strong>
+                  <ProctorEventList events={submission.events} />
+                </div>
+              </div>
+            ) : null}
+
             <div className="panel-title-row">
               <h3 id="submission-detail-title">Question-wise answers</h3>
               <DownloadResultsMenu
                 items={[
                   {
                     label: 'Student Performance CSV',
-                    helper: submission.student_full_name,
+                    helper: formatStudentName(submission.student_full_name),
                     onSelect: () => onDownload(submission),
                   },
                 ]}
@@ -3600,7 +3752,7 @@ function SubmissionReviewPanel({ submissions }) {
           <article className="submission-review-card" key={submission.id}>
             <div className="panel-title-row">
               <div>
-                <h3>{submission.student_full_name}</h3>
+                <h3>{formatStudentName(submission.student_full_name)}</h3>
                 <p className="empty-state">{submission.student_email}</p>
                 {getStudentDetails(submission) ? (
                   <p className="empty-state">{getStudentDetails(submission)}</p>
@@ -3632,11 +3784,7 @@ function SubmissionReviewPanel({ submissions }) {
                 <AlertTriangle size={18} aria-hidden="true" />
                 <div>
                   <strong>Suspicious activity</strong>
-                  {submission.events.map((event) => (
-                    <p key={event.id}>
-                      {event.event_type}: {event.details}
-                    </p>
-                  ))}
+                  <ProctorEventList events={submission.events ?? []} />
                 </div>
               </div>
             ) : null}
@@ -3657,6 +3805,26 @@ function SubmissionReviewPanel({ submissions }) {
         {submissions.length === 0 ? <p className="empty-state">No submissions for this exam yet.</p> : null}
       </div>
     </section>
+  )
+}
+
+function ProctorEventList({ events }) {
+  if (!events.length) {
+    return <p>No detailed proctoring events were returned for this submission.</p>
+  }
+
+  return (
+    <div className="proctor-event-list">
+      {events.map((event) => (
+        <div className="proctor-event-item" key={event.id}>
+          <strong>{formatActivityAction(event.event_type)}</strong>
+          {event.details ? <span>{event.details}</span> : null}
+          <small>
+            Severity: {formatActivityAction(event.severity)} | Time: {formatDateTime(event.created_at)}
+          </small>
+        </div>
+      ))}
+    </div>
   )
 }
 

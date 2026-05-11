@@ -1,3 +1,5 @@
+import re
+
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -11,6 +13,9 @@ from app.utils.enums import UserRole
 LOGIN_RATE_LIMIT_ATTEMPTS = 5
 LOGIN_RATE_LIMIT_SECONDS = 15 * 60
 STUDENT_EMAIL_DOMAIN = "stellamaryscoe.edu.in"
+REGISTER_NUMBER_PATTERN = re.compile(r"^9635\d{8}$")
+REGISTER_NUMBER_ERROR = "Register number must be a 12-digit number starting with 9635."
+REGISTER_NUMBER_DUPLICATE_ERROR = "Register number already belongs to another student."
 
 
 def normalize_email(email: str) -> str:
@@ -37,6 +42,33 @@ def _clean_optional(value: str | None) -> str | None:
         return None
     cleaned = value.strip()
     return cleaned or None
+
+
+def _normalize_student_name(full_name: str) -> str:
+    return full_name.strip().upper()
+
+
+def _validate_student_register_number(register_number: str | None) -> str:
+    cleaned = _clean_optional(register_number)
+    if not cleaned or not REGISTER_NUMBER_PATTERN.fullmatch(cleaned):
+        raise ValueError(REGISTER_NUMBER_ERROR)
+    return cleaned
+
+
+def _ensure_unique_student_register_number(
+    db: Session,
+    register_number: str,
+    exclude_user_id: int | None = None,
+) -> None:
+    statement = select(User).where(
+        User.role == UserRole.STUDENT,
+        User.register_number == register_number,
+    )
+    if exclude_user_id is not None:
+        statement = statement.where(User.id != exclude_user_id)
+
+    if db.execute(statement).scalar_one_or_none():
+        raise ValueError(REGISTER_NUMBER_DUPLICATE_ERROR)
 
 
 def _active_admin_count(db: Session) -> int:
@@ -70,12 +102,19 @@ def create_user(db: Session, user_in: UserCreate, current_admin: User | None = N
     if current_admin is not None and not current_admin.is_superuser:
         is_superuser = False
 
+    full_name = user_in.full_name.strip()
+    register_number = _clean_optional(user_in.register_number)
+    if user_in.role == UserRole.STUDENT:
+        full_name = _normalize_student_name(full_name)
+        register_number = _validate_student_register_number(user_in.register_number)
+        _ensure_unique_student_register_number(db, register_number)
+
     user = User(
         email=normalize_email(user_in.email),
-        full_name=user_in.full_name.strip(),
+        full_name=full_name,
         password_hash=hash_password(user_in.password),
         role=user_in.role,
-        register_number=_clean_optional(user_in.register_number),
+        register_number=register_number,
         department=_clean_optional(user_in.department),
         batch=_clean_optional(user_in.batch),
         class_name=_clean_optional(user_in.class_name),
@@ -100,8 +139,7 @@ def create_student_user(db: Session, user_in: UserCreate) -> User:
     if not user_in.password:
         raise ValueError("Password is required.")
 
-    if not user_in.register_number or not user_in.register_number.strip():
-        raise ValueError("Register number is required.")
+    register_number = _validate_student_register_number(user_in.register_number)
 
     if not user_in.department or not user_in.department.strip():
         raise ValueError("Department is required.")
@@ -111,7 +149,7 @@ def create_student_user(db: Session, user_in: UserCreate) -> User:
         full_name=user_in.full_name.strip(),
         password=user_in.password,
         role=UserRole.STUDENT,
-        register_number=user_in.register_number.strip(),
+        register_number=register_number,
         department=user_in.department.strip(),
         batch=user_in.batch.strip() if user_in.batch else "",
         class_name=user_in.class_name.strip() if user_in.class_name else None,
@@ -135,18 +173,31 @@ def update_user(db: Session, user_id: int, user_in: UserUpdate, current_admin: U
             raise ValueError("A user with this email already exists.")
         updates["email"] = email
 
+    effective_role = updates.get("role", user.role)
+
+    if "role" in updates and updates["role"] != user.role and not current_admin.is_superuser:
+        raise ValueError("Only a superuser can change user roles.")
+
     if "full_name" in updates:
         full_name = updates["full_name"]
         if not full_name or not full_name.strip():
             raise ValueError("Full name is required.")
-        updates["full_name"] = full_name.strip()
+        updates["full_name"] = (
+            _normalize_student_name(full_name)
+            if effective_role == UserRole.STUDENT
+            else full_name.strip()
+        )
+    elif effective_role == UserRole.STUDENT and updates.get("role") == UserRole.STUDENT:
+        updates["full_name"] = _normalize_student_name(user.full_name)
 
     for field in ("register_number", "department", "batch", "class_name"):
         if field in updates:
             updates[field] = _clean_optional(updates[field])
 
-    if "role" in updates and updates["role"] != user.role and not current_admin.is_superuser:
-        raise ValueError("Only a superuser can change user roles.")
+    if effective_role == UserRole.STUDENT and ("register_number" in updates or updates.get("role") == UserRole.STUDENT):
+        register_number = _validate_student_register_number(updates.get("register_number", user.register_number))
+        _ensure_unique_student_register_number(db, register_number, exclude_user_id=user.id)
+        updates["register_number"] = register_number
 
     if "is_superuser" in updates and not current_admin.is_superuser:
         updates["is_superuser"] = False

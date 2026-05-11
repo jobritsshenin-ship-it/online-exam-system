@@ -307,6 +307,13 @@ h3 {
   font-weight: 700;
 }
 
+.field-help {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
 input,
 textarea,
 select {
@@ -2471,6 +2478,27 @@ select:focus {
 
 .cheat-panel p {
   margin-top: 6px;
+  color: #7a271a;
+}
+
+.proctor-event-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.proctor-event-item {
+  display: grid;
+  gap: 3px;
+  color: #7a271a;
+}
+
+.proctor-event-item strong {
+  color: var(--danger);
+}
+
+.proctor-event-item span,
+.proctor-event-item small {
   color: #7a271a;
 }
 
