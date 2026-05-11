@@ -2572,10 +2572,6 @@ select:focus {
   font-weight: 900;
 }
 
-.suspicious-summary .secondary-button {
-  flex: 0 0 auto;
-}
-
 .activity-timeline-modal {
   max-width: 820px;
 }
@@ -3636,10 +3632,6 @@ select:focus {
 
   .suspicious-summary {
     display: grid;
-  }
-
-  .suspicious-summary .secondary-button {
-    width: 100%;
   }
 
   .activity-submission-header {

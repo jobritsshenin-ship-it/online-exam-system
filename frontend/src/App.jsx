@@ -3809,7 +3809,7 @@ function RiskCompactSummary({ summary }) {
   )
 }
 
-function SuspiciousActivitySummary({ summary, timelineHref }) {
+function SuspiciousActivitySummary({ summary }) {
   if (summary.totalCount === 0) {
     return (
       <div className="suspicious-summary no-risk">
@@ -3837,11 +3837,6 @@ function SuspiciousActivitySummary({ summary, timelineHref }) {
           <span>{summary.autoSubmitCount} auto-submit</span>
         </div>
       </div>
-      {timelineHref ? (
-        <a className="secondary-button" href={timelineHref}>
-          View activity timeline
-        </a>
-      ) : null}
     </div>
   )
 }
@@ -3928,10 +3923,7 @@ function SubmissionDetailModal({
 
         {!detailState.loading && !detailState.error && submission ? (
           <>
-            <SuspiciousActivitySummary
-              summary={riskSummary}
-              timelineHref={riskSummary.totalCount > 0 ? '#submission-proctor-events' : ''}
-            />
+            <SuspiciousActivitySummary summary={riskSummary} />
 
             <div className="submission-detail-grid">
               <div>
