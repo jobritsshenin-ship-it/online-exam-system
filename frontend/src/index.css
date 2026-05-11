@@ -2125,8 +2125,7 @@ select:focus {
   align-items: center;
 }
 
-.results-export-controls .action-menu,
-.results-export-controls .action-menu-trigger {
+.results-export-controls .results-export-button {
   width: 100%;
 }
 

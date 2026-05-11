@@ -2822,17 +2822,14 @@ function AdminDashboard({ token, onAuthExpired }) {
                     </option>
                   ))}
                 </select>
-                <DownloadResultsMenu
-                  variant="primary"
-                  items={[
-                    {
-                      label: 'Exam-wise Marks CSV',
-                      helper: 'Uses the selected exam above.',
-                      disabled: !resultExportExamId,
-                      onSelect: () => exportExamMarksCsv(),
-                    },
-                  ]}
-                />
+                <button
+                  className="primary-button results-export-button"
+                  type="button"
+                  onClick={() => exportExamMarksCsv()}
+                >
+                  <Download size={16} aria-hidden="true" />
+                  Download Exam-wise Marks CSV
+                </button>
               </div>
             </div>
           </div>
