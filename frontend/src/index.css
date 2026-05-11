@@ -2143,6 +2143,32 @@ select:focus {
   align-items: center;
 }
 
+.maintenance-card {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.maintenance-card h3 {
+  margin: 0 0 6px;
+}
+
+.maintenance-card p {
+  margin: 0;
+  color: var(--muted);
+}
+
+.maintenance-warning {
+  margin-top: 8px !important;
+  color: var(--danger) !important;
+  font-weight: 800;
+}
+
 .results-filter-bar .search-box,
 .activity-filter-bar .search-box {
   min-width: 0;
@@ -2886,9 +2912,14 @@ select:focus {
   .submission-item,
   .result-panel,
   .cheat-panel,
+  .maintenance-card,
   .security-alert-card {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .maintenance-card .primary-button {
+    width: 100%;
   }
 
   .csv-row-preview {

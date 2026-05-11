@@ -4,6 +4,7 @@ from io import StringIO
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import func, select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.api.deps.auth import get_db, require_admin
@@ -16,7 +17,8 @@ from app.schemas.admin import (
     SecurityAlertRead,
     StudentExamHistoryItemRead,
 )
-from app.services.admin_activity_service import list_admin_activity
+from app.services.admin_activity_service import list_admin_activity, log_admin_activity
+from app.services.backup_service import generate_database_backup
 from app.services.exam_service import get_student_exam_history
 from app.services.security_alert_service import list_security_alerts, resolve_security_alert
 from app.utils.enums import SubmissionStatus, UserRole
@@ -129,6 +131,44 @@ def read_admin_activity(
         offset=offset,
         action=action,
         entity_type=entity_type,
+    )
+
+
+@router.get("/backups/download")
+def download_database_backup(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    if not current_user.is_superuser:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Super admin access required.",
+        )
+
+    try:
+        backup = generate_database_backup()
+    except (RuntimeError, SQLAlchemyError, OSError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Unable to generate database backup.",
+        ) from exc
+
+    log_admin_activity(
+        db=db,
+        admin=current_user,
+        action="database_backup_downloaded",
+        entity_type="backup",
+        details={
+            "filename": backup.filename,
+            "exported_tables": backup.table_names,
+            "row_counts": backup.row_counts,
+        },
+    )
+
+    return Response(
+        content=backup.content,
+        media_type="application/gzip",
+        headers={"Content-Disposition": f'attachment; filename="{backup.filename}"'},
     )
 
 

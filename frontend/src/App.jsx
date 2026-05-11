@@ -279,13 +279,25 @@ function formatActivityAction(value) {
     .join(' ')
 }
 
+function formatActivityDetailValue(value) {
+  if (Array.isArray(value)) {
+    return value.join(', ')
+  }
+  if (value && typeof value === 'object') {
+    return Object.entries(value)
+      .map(([key, item]) => `${formatActivityAction(key)}: ${String(item)}`)
+      .join('; ')
+  }
+  return String(value)
+}
+
 function formatActivityDetails(value) {
   if (!value) return '-'
   try {
     const parsed = JSON.parse(value)
     if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
       return Object.entries(parsed)
-        .map(([key, item]) => `${formatActivityAction(key)}: ${String(item)}`)
+        .map(([key, item]) => `${formatActivityAction(key)}: ${formatActivityDetailValue(item)}`)
         .join(', ')
     }
   } catch {
@@ -419,6 +431,7 @@ function App() {
         <AdminDashboard
           key={`admin-${auth.user.id}-${auth.access_token}`}
           token={auth.access_token}
+          user={auth.user}
           onAuthExpired={handleAuthExpired}
         />
       ) : (
@@ -1523,7 +1536,7 @@ function ExamAttempt({
   )
 }
 
-function AdminDashboard({ token, onAuthExpired }) {
+function AdminDashboard({ token, user, onAuthExpired }) {
   const [exams, setExams] = useState([])
   const [selectedExam, setSelectedExam] = useState(null)
   const [submissions, setSubmissions] = useState([])
@@ -1555,6 +1568,7 @@ function AdminDashboard({ token, onAuthExpired }) {
   const [resultExportExamId, setResultExportExamId] = useState('')
   const [activitySearch, setActivitySearch] = useState('')
   const [activityActionFilter, setActivityActionFilter] = useState('all')
+  const [isBackupDownloading, setIsBackupDownloading] = useState(false)
   const [submissionDetailState, setSubmissionDetailState] = useState({
     isOpen: false,
     loading: false,
@@ -2259,6 +2273,34 @@ function AdminDashboard({ token, onAuthExpired }) {
     } catch (err) {
       showError(err)
     }
+  }
+
+  async function downloadDatabaseBackup() {
+    setIsBackupDownloading(true)
+    setStatus({ loading: true, error: '', success: '' })
+    try {
+      await downloadApiFile('/admin/backups/download', {
+        token,
+        fallbackFilename: 'online_exam_backup.json.gz',
+      })
+      setStatus({ loading: false, error: '', success: 'Database backup downloaded.' })
+      try {
+        const activityData = await apiRequest('/admin/activity?limit=200', { token })
+        setActivityLogs(activityData)
+      } catch (err) {
+        if (handleAuthenticatedError(err, onAuthExpired)) {
+          setIsBackupDownloading(false)
+          return
+        }
+      }
+    } catch (err) {
+      if (handleAuthenticatedError(err, onAuthExpired)) {
+        setIsBackupDownloading(false)
+        return
+      }
+      setStatus({ loading: false, error: err.message, success: '' })
+    }
+    setIsBackupDownloading(false)
   }
 
   async function resolveSecurityAlert(alertId) {
@@ -3050,6 +3092,31 @@ function AdminDashboard({ token, onAuthExpired }) {
               <span>{activityLogs.length} recorded</span>
             </div>
           </div>
+
+          {user?.is_superuser ? (
+            <article className="maintenance-card">
+              <div>
+                <h3>Maintenance</h3>
+                <p>Download a redacted database backup for emergency restore or record keeping.</p>
+                <p className="maintenance-warning">
+                  Keep backup files private. They may contain student, exam, and result data.
+                </p>
+              </div>
+              <button
+                className="primary-button"
+                type="button"
+                onClick={downloadDatabaseBackup}
+                disabled={isBackupDownloading || status.loading}
+              >
+                {isBackupDownloading ? (
+                  <Loader2 className="spin" size={18} aria-hidden="true" />
+                ) : (
+                  <Download size={16} aria-hidden="true" />
+                )}
+                {isBackupDownloading ? 'Downloading Backup' : 'Download Database Backup'}
+              </button>
+            </article>
+          ) : null}
 
           <div className="activity-filter-bar">
             <label className="search-box">
