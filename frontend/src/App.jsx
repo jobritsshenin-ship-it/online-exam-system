@@ -576,29 +576,187 @@ function formatEventModifiers(metadata) {
 
 function formatActivityDetailValue(value) {
   if (Array.isArray(value)) {
-    return value.join(', ')
+    return value.map((item) => formatActivityAction(item)).join(', ')
   }
   if (value && typeof value === 'object') {
     return Object.entries(value)
       .map(([key, item]) => `${formatActivityAction(key)}: ${String(item)}`)
       .join('; ')
   }
+  if (value === null || value === undefined || value === '') return '-'
   return String(value)
 }
 
-function formatActivityDetails(value) {
-  if (!value) return '-'
+function parseActivityDetails(value) {
+  if (!value) return { parsed: null, raw: '' }
+  if (typeof value !== 'string') {
+    return value && typeof value === 'object' ? { parsed: value, raw: '' } : { parsed: null, raw: String(value) }
+  }
+
   try {
     const parsed = JSON.parse(value)
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      return Object.entries(parsed)
-        .map(([key, item]) => `${formatActivityAction(key)}: ${formatActivityDetailValue(item)}`)
+    if (parsed && typeof parsed === 'object') {
+      return { parsed, raw: '' }
+    }
+    return { parsed: null, raw: String(parsed) }
+  } catch {
+    return { parsed: null, raw: value }
+  }
+}
+
+function getBackupRowEntries(details) {
+  const rowCounts = details?.row_counts
+  if (!rowCounts || typeof rowCounts !== 'object' || Array.isArray(rowCounts)) return []
+  return Object.entries(rowCounts)
+    .map(([key, value]) => [formatActivityAction(key), Number(value) || 0])
+    .sort(([firstKey], [secondKey]) => firstKey.localeCompare(secondKey))
+}
+
+function getBackupTableCount(details, rowEntries) {
+  if (Array.isArray(details?.exported_tables)) return details.exported_tables.length
+  return rowEntries.length
+}
+
+function getBackupRowTotal(rowEntries) {
+  return rowEntries.reduce((total, [, count]) => total + count, 0)
+}
+
+function formatActivityDetails(value) {
+  const { parsed, raw } = parseActivityDetails(value)
+  if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+    if (parsed.filename || parsed.exported_tables || parsed.row_counts) {
+      const rowEntries = getBackupRowEntries(parsed)
+      const tableCount = getBackupTableCount(parsed, rowEntries)
+      const rowTotal = getBackupRowTotal(rowEntries)
+      const rowDetails = rowEntries.map(([name, count]) => `${name}: ${count}`).join(', ')
+      return [
+        'Database backup exported',
+        parsed.filename ? `Filename: ${parsed.filename}` : '',
+        tableCount ? `Tables: ${tableCount}` : '',
+        rowEntries.length ? `Rows: ${rowTotal} total` : '',
+        rowDetails,
+      ]
+        .filter(Boolean)
         .join(', ')
     }
-  } catch {
-    return value
+
+    return Object.entries(parsed)
+      .map(([key, item]) => `${formatActivityAction(key)}: ${formatActivityDetailValue(item)}`)
+      .join(', ')
   }
-  return value
+  return raw || '-'
+}
+
+function ActivityDetails({ log }) {
+  const [isExpanded, setIsExpanded] = useState(false)
+  const { parsed, raw } = parseActivityDetails(log.details)
+
+  if (!parsed && !raw) {
+    return <span className="activity-empty-detail">-</span>
+  }
+
+  if (log.action === 'database_backup_downloaded' && parsed && typeof parsed === 'object') {
+    const rowEntries = getBackupRowEntries(parsed)
+    const tableCount = getBackupTableCount(parsed, rowEntries)
+    const rowTotal = getBackupRowTotal(rowEntries)
+    const visibleRowEntries = isExpanded ? rowEntries : rowEntries.slice(0, 4)
+    const hiddenRowCount = rowEntries.length - visibleRowEntries.length
+
+    return (
+      <div className="activity-detail-block backup-detail">
+        <strong className="activity-detail-title">Database backup exported</strong>
+        <dl className="activity-backup-summary">
+          {parsed.filename ? (
+            <div>
+              <dt>Filename</dt>
+              <dd>{parsed.filename}</dd>
+            </div>
+          ) : null}
+          {tableCount ? (
+            <div>
+              <dt>Tables</dt>
+              <dd>{tableCount}</dd>
+            </div>
+          ) : null}
+          {rowEntries.length ? (
+            <div>
+              <dt>Rows</dt>
+              <dd>{rowTotal} total</dd>
+            </div>
+          ) : null}
+        </dl>
+        {visibleRowEntries.length ? (
+          <div className="activity-row-chip-list" aria-label="Backup row counts">
+            {visibleRowEntries.map(([name, count]) => (
+              <span className="activity-row-chip" key={name}>
+                <strong>{name}</strong>
+                {count}
+              </span>
+            ))}
+          </div>
+        ) : null}
+        {hiddenRowCount > 0 || isExpanded ? (
+          <button
+            className="activity-details-toggle"
+            type="button"
+            aria-expanded={isExpanded}
+            onClick={() => setIsExpanded((current) => !current)}
+          >
+            {isExpanded ? 'Hide details' : `Show details${hiddenRowCount > 0 ? ` (${hiddenRowCount} more)` : ''}`}
+          </button>
+        ) : null}
+      </div>
+    )
+  }
+
+  if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+    const entries = Object.entries(parsed)
+    const visibleEntries = isExpanded ? entries : entries.slice(0, 3)
+    const hasHiddenEntries = entries.length > visibleEntries.length
+
+    return (
+      <div className="activity-detail-block">
+        <div className="activity-detail-pairs">
+          {visibleEntries.map(([key, value]) => (
+            <span className="activity-detail-pair" key={key}>
+              <strong>{formatActivityAction(key)}</strong>
+              {formatActivityDetailValue(value)}
+            </span>
+          ))}
+        </div>
+        {hasHiddenEntries || isExpanded ? (
+          <button
+            className="activity-details-toggle"
+            type="button"
+            aria-expanded={isExpanded}
+            onClick={() => setIsExpanded((current) => !current)}
+          >
+            {isExpanded ? 'Hide details' : 'Show details'}
+          </button>
+        ) : null}
+      </div>
+    )
+  }
+
+  const detailText = raw || '-'
+  const isLongText = detailText.length > 180
+  const visibleText = isLongText && !isExpanded ? `${detailText.slice(0, 180).trim()}...` : detailText
+
+  return (
+    <div className="activity-detail-block">
+      <p>{visibleText}</p>
+      {isLongText ? (
+        <button
+          className="activity-details-toggle"
+          type="button"
+          aria-expanded={isExpanded}
+          onClick={() => setIsExpanded((current) => !current)}
+        >
+          {isExpanded ? 'Hide details' : 'Show details'}
+        </button>
+      ) : null}
+    </div>
+  )
 }
 
 function sanitizeCsvFilename(value) {
@@ -3704,8 +3862,15 @@ function AdminDashboard({ token, user, onAuthExpired }) {
           </div>
 
           {filteredActivityLogs.length > 0 ? (
-            <div className="results-table-wrap">
+            <div className="results-table-wrap activity-table-wrap">
               <table className="results-table activity-table">
+                <colgroup>
+                  <col className="activity-col-action" />
+                  <col className="activity-col-admin" />
+                  <col className="activity-col-entity" />
+                  <col className="activity-col-details" />
+                  <col className="activity-col-time" />
+                </colgroup>
                 <thead>
                   <tr>
                     <th>Action</th>
@@ -3718,14 +3883,22 @@ function AdminDashboard({ token, user, onAuthExpired }) {
                 <tbody>
                   {filteredActivityLogs.map((log) => (
                     <tr key={log.id}>
-                      <td>{formatActivityAction(log.action)}</td>
-                      <td>{log.admin_email ?? 'System'}</td>
-                      <td>
+                      <td className="activity-cell-action" data-label="Action">
+                        {formatActivityAction(log.action)}
+                      </td>
+                      <td className="activity-cell-admin" data-label="Admin">
+                        {log.admin_email ?? 'System'}
+                      </td>
+                      <td className="activity-cell-entity" data-label="Entity">
                         <strong>{log.entity_type ?? '-'}</strong>
                         <span>{log.entity_id ?? '-'}</span>
                       </td>
-                      <td>{formatActivityDetails(log.details)}</td>
-                      <td>{formatDateTime(log.created_at)}</td>
+                      <td className="activity-cell-details" data-label="Details">
+                        <ActivityDetails log={log} />
+                      </td>
+                      <td className="activity-cell-time" data-label="Time">
+                        <time dateTime={log.created_at}>{formatDateTime(log.created_at)}</time>
+                      </td>
                     </tr>
                   ))}
                 </tbody>

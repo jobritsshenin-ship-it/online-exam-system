@@ -1,0 +1,6 @@
+students.csv
+students_*.csv
+*.log
+.env
+.venv/
+__pycache__/
